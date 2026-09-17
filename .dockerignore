@@ -1,0 +1,23 @@
+# build cache / virtualenv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# local state
+var/
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# repo noise
+.git/
+.gitignore
+.github/
+tests/
+.dockerignore
+docker-compose.yml
+*.md
+!README.md

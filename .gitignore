@@ -1,0 +1,22 @@
+# virtualenv / build artefacts
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# local state (DB + blobs)
+var/
+data/
+*.db
+*.db-wal
+*.db-shm
+.aif-*.json
+
+# secrets
+.env

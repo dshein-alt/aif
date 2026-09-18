@@ -687,6 +687,32 @@ def test_skill_card_is_served_in_both_shapes(cli):
     assert all({"args", "write", "summary"} <= set(o) for o in js["ops"].values())
 
 
+def test_an_unidentifiable_build_says_nothing_rather_than_guessing(cli, tmp_path):
+    """No readable source must not render as a confident id - ping omits the key instead.
+
+    An empty glob is not an error, so the digest of no input (`pkg:e3b0c44298`) would otherwise be
+    returned for a missing or unreadable package directory: a well-formed id naming no code, the
+    same class of lie as a bare sha on a dirty tree. The key's presence is itself a claim.
+    """
+    from aif import _source_digest, build_id
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("x = 1")
+    with_source = _source_digest(pkg)
+    assert with_source.startswith("pkg:") and with_source == _source_digest(pkg)  # stable
+    (pkg / "a.py").write_text("x = 2")
+    assert _source_digest(pkg) != with_source  # and it moves with the code
+
+    assert _source_digest(tmp_path / "never-existed") == ""  # missing dir
+    (empty := tmp_path / "empty").mkdir()
+    assert _source_digest(empty) == ""  # present but no sources
+    assert "e3b0c44298" not in _source_digest(empty)  # never the digest of nothing
+
+    body = cli.get("/api/ping").json()  # this tree is identifiable, so the key is present
+    assert body["build"] == build_id() and body["build"]
+
+
 def test_the_card_stays_within_its_budget():
     """Cheap to put in a context - but budgeted in one named place, not walled by a magic number."""
     from aif.skill import CARD, CARD_BUDGET

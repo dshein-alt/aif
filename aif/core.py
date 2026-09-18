@@ -478,7 +478,9 @@ def op_ping(cfg: Config, conn: sqlite3.Connection, me: str | None = None, admin:
     out: dict[str, Any] = {
         "ok": 1,
         "v": __version__,  # the release; "build" below is the actual code running
-        "build": build_id(),  # git sha (short) or pkg:<hash> - "is commit X deployed?" answered on the wire
+        # git sha (short) or pkg:<hash> - "is commit X deployed?" answered on the wire. Omitted
+        # entirely when the code cannot be identified, so the key's presence is itself a claim.
+        **({"build": build_id()} if build_id() else {}),
         "ts": db.now(),
         "seq": max_seq(conn),
         "limits": {

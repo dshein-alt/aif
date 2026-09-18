@@ -61,6 +61,27 @@ def _git_dirty(pkg: pathlib.Path) -> bool | None:
     return bool(out.stdout.strip()) if out.returncode == 0 else None
 
 
+def _source_digest(pkg: pathlib.Path) -> str:
+    """``pkg:<hash>`` over the package's own sources, or ``""`` when none can be read.
+
+    An empty glob is not an error, so without the count this returns ``pkg:e3b0c44298`` - sha256 of
+    no input - for a missing or unreadable package directory: a confident-looking id for no code at
+    all, which is the same class of lie as a bare sha on a dirty tree. Saying nothing lets the
+    caller omit the field, so "I cannot tell you" stays distinguishable from "here is the answer".
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    hashed = 0
+    try:
+        for f in sorted(pkg.glob("*.py")):
+            digest.update(f.name.encode() + b"\0" + f.read_bytes())
+            hashed += 1
+    except OSError:  # never raise out of build_id(): it runs inside ping, and a diagnostic field
+        return ""    # must not turn into an outage
+    return "pkg:" + digest.hexdigest()[:10] if hashed else ""
+
+
 def _compute_build() -> str:
     pkg = pathlib.Path(__file__).resolve().parent
     sha = _git_sha(pkg.parent / ".git")
@@ -69,12 +90,7 @@ def _compute_build() -> str:
         # bare sha = verified clean; -dirty = uncommitted package changes; -unknown = git cannot say
         suffix = "" if dirty is False else "-dirty" if dirty else "-unknown"
         return sha[:7] + suffix
-    import hashlib
-
-    digest = hashlib.sha256()
-    for f in sorted(pkg.glob("*.py")):
-        digest.update(f.name.encode() + b"\0" + f.read_bytes())
-    return "pkg:" + digest.hexdigest()[:10]
+    return _source_digest(pkg)
 
 
 _compute_build = functools.lru_cache(maxsize=1)(_compute_build)

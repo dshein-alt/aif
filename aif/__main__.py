@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import pathlib
 import secrets
 import sys
 from typing import Any
@@ -46,18 +47,23 @@ def load_env_file(path: str) -> dict[str, str]:
     return out
 
 
-def _config(args: argparse.Namespace) -> Config:
-    env: dict[str, str] = dict(os.environ)
-    env_file = getattr(args, "env_file", None) or (".env" if os.path.isfile(".env") else None)
-    if env_file:  # real environment variables win over the file (standard dotenv convention)
-        for key, value in load_env_file(env_file).items():
-            env.setdefault(key, value)
+def _apply_args(args: argparse.Namespace, env: dict[str, str]) -> None:
+    """CLI flags beat the environment: write them into *env* (used by _config and --reload)."""
     for attr, key in (("data_dir", "AIF_DATA_DIR"), ("token", "AIF_TOKEN"), ("admin_token", "AIF_ADMIN_TOKEN"), ("max_file_size", "AIF_MAX_FILE_SIZE"), ("db_path", "AIF_DB_PATH"), ("attachments_dir", "AIF_ATTACHMENTS_DIR")):
         value = getattr(args, attr, None)
         if value:
             env[key] = str(value)
     if getattr(args, "ui", None):
         env["AIF_UI"] = args.ui
+
+
+def _config(args: argparse.Namespace) -> Config:
+    env: dict[str, str] = dict(os.environ)
+    env_file = getattr(args, "env_file", None) or (".env" if os.path.isfile(".env") else None)
+    if env_file:  # real environment variables win over the file (standard dotenv convention)
+        for key, value in load_env_file(env_file).items():
+            env.setdefault(key, value)
+    _apply_args(args, env)
     return Config.from_env(env)
 
 
@@ -79,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--token", help="access token (env AIF_TOKEN); comma separated for several")
     serve.add_argument("--max-file-size", help="per attachment cap, e.g. 5MB (env AIF_MAX_FILE_SIZE)")
     serve.add_argument("--ui", choices=("on", "off"), help="read-only human browser view at /ui")
+    serve.add_argument("--reload", action="store_true", help="development: restart the server when the source code changes")
     serve.add_argument("--no-docs", action="store_true", help="hide /docs and /openapi.json")
 
     common(sub.add_parser("init", help="create the database and blob directories, then exit"))
@@ -149,8 +156,37 @@ def main(argv: list[str] | None = None) -> int:
     )
     import uvicorn
 
+    if args.reload:  # development convenience: uvicorn watches the source and restarts on change
+        print("aif: --reload on: the server restarts whenever the code changes (development only)", flush=True)
+        # the reloaded child processes see only the environment: pass flags and the .env file through it
+        env_file = getattr(args, "env_file", None) or (".env" if os.path.isfile(".env") else None)
+        if env_file:
+            for key, value in load_env_file(env_file).items():
+                os.environ.setdefault(key, value)
+        _apply_args(args, os.environ)
+        uvicorn.run(
+            "aif.__main__:_reload_factory",
+            factory=True,
+            host=args.host,
+            port=args.port,
+            log_level=os.environ.get("AIF_LOG_LEVEL", "info"),
+            reload=True,
+            reload_dirs=[str(pathlib.Path(__file__).resolve().parent)],
+        )
+        return 0
     uvicorn.run(app, host=args.host, port=args.port, log_level=os.environ.get("AIF_LOG_LEVEL", "info"))
     return 0
+
+
+def _reload_factory() -> Any:
+    """Build the app from the environment - used by ``aif serve --reload`` so each restart gets
+    a fresh process with the current code (uvicorn re-imports the module on change)."""
+    cfg = Config.from_env()
+    db.init(cfg)
+    seed.run(cfg)
+    from .app import create_app
+
+    return create_app(cfg)
 
 
 def conn_pending(cfg: Config) -> int:  # pragma: no cover - kept for scripts

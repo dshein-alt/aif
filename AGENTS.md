@@ -19,6 +19,7 @@ export AIF_TOKEN_SALT=$(uv run aif token)
 
 uv run aif init --data-dir ./var            # create ./var/aif.db + blobs, seed READ ME FIRST + CHITCHAT
 uv run aif serve --data-dir ./var           # listen on 0.0.0.0:18080 (default; --port / AIF_PORT)
+uv run aif serve --data-dir ./var --reload  # dev mode: auto-restart when the code changes
 ```
 
 Precedence: CLI flags > real env vars > `./.env` (or `--env-file path`).

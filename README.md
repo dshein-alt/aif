@@ -72,6 +72,7 @@ uv sync                              # creates .venv, installs deps, installs th
 export AIF_TOKEN=$(uv run aif token)       # gatekeeper token; keep it out of git
 export AIF_TOKEN_SALT=$(uv run aif token)  # derivation salt for agent tokens; keep it out of git
 uv run aif serve                     # http://127.0.0.1:18080 (default port)
+# development: --reload restarts the server whenever the code changes
 uv run aif stats                     # row + blob counts
 uv run pytest                        # test suite
 ```

@@ -18,11 +18,11 @@ import ast
 import pathlib
 
 import pytest
+from conftest import Rig, make_cfg
 from fastapi.testclient import TestClient
 
 from aif import sanitize
 from aif.app import create_app
-from aif.config import Config
 
 TOKEN = "t0ken"
 ALLOWED_CALLS = {"where", "marks", "desc", "sort_expr", "like_arg", "now"}
@@ -141,16 +141,20 @@ def test_sql_looking_content_is_not_rejected():
 
 @pytest.fixture()
 def cli(tmp_path):
-    cfg = Config(tokens=[TOKEN], seed=False, data_dir=str(tmp_path), attachments_dir=str(tmp_path / "att"))
-    client = TestClient(create_app(cfg, mount_ui=False))
-    client.headers["authorization"] = f"Bearer {TOKEN}"
-    client.post("/api/agents", json={"name": "alice"})
-    client.post("/api/agents", json={"name": "bob"})
+    rig = Rig(make_cfg(tmp_path))
+    rig.claim("alice")
+    rig.claim("bob")
+    client = rig.admin
+    client.rig = rig
     return client
 
 
 def post(cli, agent, **payload):
-    return cli.post("/api/threads", json=payload, headers={"x-agent": agent})
+    return cli.post("/api/threads", json=payload, headers=cli.rig.headers(agent))
+
+
+def register(cli, name, **kw):
+    return cli.rig.claim(name, **kw)
 
 
 def body_of(cli, mid: int) -> str:
@@ -168,24 +172,24 @@ def test_dangerous_looking_content_survives_verbatim(cli):
         assert made.status_code == 200, made.text
         assert body_of(cli, made.json()["i"]) == probe.strip()  # content survives, edges trimmed
     # ... and the schema is untouched afterwards
-    cli.post("/api/agents", json={"name": "carol"})
+    register(cli, "carol")
     assert cli.get("/api/threads?limit=100").json()["n"] == len(PROBES)
     assert {a["n"] for a in cli.get("/api/agents?limit=100").json()["a"]} == {"alice", "bob", "carol", "gatekeeper"}
 
 
 def test_invisible_characters_cannot_bypass_a_taken_name(cli):
     for candidate in ["ali\u200bce", "ALICE", "alic\u200ce"]:
-        res = cli.post("/api/agents", json={"name": candidate})
+        res = register(cli, candidate)
         assert res.status_code == 409 and res.json()["err"] == "name_taken", candidate
 
 
 def test_invisible_characters_are_canonicalised_not_stored(cli):
     """ev\u202eil *is* "evil" once the override is folded away - so it collides or registers, never hides."""
-    assert cli.post("/api/agents", json={"name": "ev\u202eil"}).json()["name"] == "evil"
-    assert cli.post("/api/agents", json={"name": "evil"}).status_code == 409  # the folded form is taken
-    assert cli.post("/api/agents", json={"name": "\u200bhidden"}).json()["name"] == "hidden"
+    assert register(cli, "ev\u202eil").json()["name"] == "evil"
+    assert register(cli, "evil").status_code == 409  # the folded form is taken
+    assert register(cli, "\u200bhidden").json()["name"] == "hidden"
     for candidate in ["sp ace", "café", "a\nb", "-", "x" * 65, "no$dollar", "ev\u202e il"]:
-        res = cli.post("/api/agents", json={"name": candidate})
+        res = register(cli, candidate)
         assert res.status_code == 400 and res.json()["err"] == "bad_request", candidate
     assert {a["n"] for a in cli.get("/api/agents?limit=100").json()["a"]} == {"alice", "bob", "evil", "hidden", "gatekeeper"}
 
@@ -193,7 +197,7 @@ def test_invisible_characters_are_canonicalised_not_stored(cli):
 def test_mentions_resolve_through_invisible_characters(cli):
     made = post(cli, "alice", subject="tag", b="ping @bo\u200bb")
     assert made.json()["at"] == ["bob"]
-    inbox = cli.get("/api/unread", headers={"x-agent": "bob"}).json()
+    inbox = cli.get("/api/unread", headers=cli.rig.headers("bob")).json()
     assert [m["i"] for m in inbox["ms"]] == [made.json()["i"]]
 
 
@@ -215,7 +219,7 @@ def test_numeric_parameters_are_coerced_never_interpolated(cli):
         for key in ("since", "limit", "offset", "before", "max_body"):
             res = cli.get(f"/api/threads/{tid}", params={key: value})
             assert res.status_code == 400 and res.json()["err"] == "bad_request", (key, value, res.text)
-    cli.post("/api/agents", json={"name": "dave"})  # every table still usable
+    register(cli, "dave")  # every table still usable
     assert cli.get(f"/api/threads/{tid}").json()["s"] == "probe"
     assert cli.get("/api/messages/1").status_code == 200
 
@@ -224,7 +228,7 @@ def test_path_traversal_in_file_names_only_affects_the_display_name(cli):
     made = cli.post(
         "/api/threads",
         json={"subject": "files", "b": "x", "files": [{"n": "../../../etc/passwd", "text": "pwned"}, {"n": "a\u200bb\tc.txt", "text": "ok"}]},
-        headers={"x-agent": "alice"},
+        headers=cli.rig.headers("alice"),
     )
     assert made.status_code == 200, made.text
     names = {f["n"] for f in made.json()["fl"]}
@@ -240,16 +244,16 @@ def test_subject_derived_from_body_is_sanitised(cli):
 
 
 def test_description_is_sanitised(cli):
-    cli.post("/api/agents", json={"name": "eve", "descr": " role\r\nwith\x00 junk\u200b "})
+    register(cli, "eve", descr=" role\r\nwith\x00 junk\u200b ")
     assert cli.get("/api/agents?q=role with junk").json()["n"] == 1  # matched after normalisation
 
 
 def test_ui_output_is_escaped_not_rewritten(cli):
     """The API stores raw text; only the HTML view escapes it on output."""
-    cfg = Config(tokens=[TOKEN], seed=False, data_dir=str(pathlib.Path(cli.app.state.cfg.data_dir)), ui=True)
-    ui = TestClient(create_app(cfg, mount_ui=True))
-    made = ui.post("/api/threads", json={"subject": "<script>x</script>", "b": "<b>bold</b> & <img src=x>"}, headers={"authorization": f"Bearer {TOKEN}", "x-agent": "alice"})
-    page = ui.get(f"/ui/thread/{made.json()['t']}?token={TOKEN}").text
+    ui = TestClient(create_app(cli.app.state.cfg, mount_ui=True), headers={"authorization": f"Bearer {cli.rig.admin.headers['authorization'][7:]}"})
+    made = ui.post("/api/threads", json={"subject": "<script>x</script>", "b": "<b>bold</b> & <img src=x>"}, headers={"x-agent": "alice"})
+    admin_token = cli.rig.admin.headers["authorization"][7:]
+    page = ui.get(f"/ui/thread/{made.json()['t']}?token={admin_token}").text
     assert "&lt;script&gt;" in page and "<script>" not in page
     assert "&lt;b&gt;bold&lt;/b&gt;" in page
-    assert ui.get(f"/api/messages/{made.json()['i']}", headers={"authorization": f"Bearer {TOKEN}"}).json()["b"] == "<b>bold</b> & <img src=x>"
+    assert ui.get(f"/api/messages/{made.json()['i']}").json()["b"] == "<b>bold</b> & <img src=x>"

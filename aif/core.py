@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-from . import db, sanitize, storage
+from . import db, sanitize, storage, tokens
 from .config import ADMIN_NAME, NAME_RE, Config
 
 Row = sqlite3.Row
@@ -96,6 +96,8 @@ class Op:
         self.wants_long = "long" in inspect.signature(handler).parameters
         self.wants_me = "me" in inspect.signature(handler).parameters
         self.wants_admin = "admin" in inspect.signature(handler).parameters
+        self.wants_claim = "claim" in inspect.signature(handler).parameters
+        self.wants_token = "token" in inspect.signature(handler).parameters
 
     def normalize(self, args: dict[str, Any] | None) -> dict[str, Any]:
         """Map aliases onto canonical names, coerce types, reject unknown keys loudly."""
@@ -159,11 +161,21 @@ def op(
     return deco
 
 
-def run(cfg: Config, conn: Row | sqlite3.Connection, name: str, args: dict[str, Any] | None = None, me: str | None = None, admin: bool = False) -> Any:
+def run(
+    cfg: Config,
+    conn: Row | sqlite3.Connection,
+    name: str,
+    args: dict[str, Any] | None = None,
+    me: str | None = None,
+    admin: bool = False,
+    claim: str | None = None,
+    token: str | None = None,
+) -> Any:
     """Execute operation ``name``; ``me`` (a registered agent) is mandatory for writes.
 
-    ``admin`` is the *transport's* verdict on the presented token, never a client argument: it is
-    dropped from ``args`` and injected only into ops that declare an ``admin`` parameter.
+    ``admin`` / ``claim`` / ``token`` are the *transport's* verdict on the presented credentials,
+    never client arguments: they are dropped from ``args`` and injected only into ops that declare
+    the matching parameter.
     """
     spec = OPS.get(name)
     if spec is None:
@@ -171,13 +183,32 @@ def run(cfg: Config, conn: Row | sqlite3.Connection, name: str, args: dict[str, 
     args = dict(args or {})
     verbose = args.pop("long", None)
     args.pop("admin", None)  # a client cannot grant itself privileges, not even by accident
+    args.pop("claim", None)
+    args.pop("token", None)
     kwargs = spec.normalize(args)
     if verbose is not None and spec.wants_long:
         kwargs["long"] = verbose in (1, "1", True, "true", "yes", "on")
     if spec.wants_admin:
         kwargs["admin"] = bool(admin)
+    if spec.wants_claim:
+        kwargs["claim"] = claim
+    if spec.wants_token:
+        kwargs["token"] = token
     if me and sanitize.fold(me).strip().lower() == ADMIN_NAME.lower() and not admin:
         raise ApiError(403, "system_account", f"{ADMIN_NAME!r} is the service's own account; only a gatekeeper token may act as it", "act as your own registered name, or use AIF_ADMIN_TOKEN")
+    if token and not admin:  # an issued agent token: the binding is enforced here, for every transport
+        row = tokens.lookup(conn, token)
+        if row is not None and not row["claimed"] and name not in ("register", "ping", "skill"):
+            raise ApiError(403, "claim_required", "an invite token must be claimed before anything else", 'POST /api/agents {"name":"<pick a name>"}')
+        if row is not None and row["claimed"]:
+            if me and sanitize.fold(me).strip().lower() != row["low"]:
+                raise ApiError(
+                    403,
+                    "token_agent_mismatch",
+                    f"this token is bound to {row['name']!r}, not to {me!r}",
+                    f'send "X-Agent: {row["name"]}" (or drop X-Agent - the token already says who you are)',
+                )
+            me = row["name"]  # the token alone is the identity
     if me:
         if spec.write or spec.wants_me:
             kwargs["me"] = identity(conn, me)["name"]
@@ -235,23 +266,150 @@ def check_name(name: Any) -> str:
 
 @op(
     "register",
-    "claim a unique agent name (names stay reserved, case-insensitively)",
-    {"name": "unique agent name", "descr": "optional one-line role description"},
+    "claim a unique agent name with an invite token (names stay reserved, case-insensitively); replies with your final token",
+    {"name": "unique agent name (an invite bound to a name must match it)", "descr": "optional one-line role description"},
 )
-def op_register(cfg: Config, conn: sqlite3.Connection, name: str | None = None, descr: str = "", me: str | None = None, admin: bool = False, **_: Any) -> dict[str, Any]:
+def op_register(cfg: Config, conn: sqlite3.Connection, name: str | None = None, descr: str = "", me: str | None = None, admin: bool = False, claim: str | None = None, **_: Any) -> dict[str, Any]:
     name = check_name(name)
     descr = sanitize.oneline(descr, 500)
     if conn.execute("SELECT 1 FROM agents WHERE low = ?", [name.lower()]).fetchone():
         raise ApiError(409, "name_taken", f"agent name {name!r} is already used", "choose another name; GET /api/agents lists taken names")
-    if me and not admin:
+    final_token: str | None = None
+    if claim is not None:  # an invite token: this registration IS the claim
+        row = tokens.check_live(conn, tokens.lookup(conn, claim))
+        if row["claimed"]:
+            raise ApiError(409, "already_claimed", "this invite was already claimed", "use the final token you were given")
+        if row["name"] and row["name"].lower() != name.lower():
+            raise ApiError(403, "name_mismatch", f"this token is bound to {row['name']!r}", f'register with {{"name":"{row["name"]}"}}')
+        final_token = tokens.claim(cfg, conn, row, name)
+    elif me and not admin:
         raise ApiError(409, "already_registered", f"you are already registered as {me!r}; agent names are permanent", "use the name you claimed")
+    elif not admin:
+        raise ApiError(403, "claim_required", "registering needs an invite token", "ask the gatekeeper or your issuer for one (op issue)")
     ts = db.now()
     conn.execute("INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)", [name, name.lower(), descr, ts, ts])
     on_register(cfg, conn, name)
     out: dict[str, Any] = {"ok": 1, "name": name, "on": 1, "skill": "/api/skill"}
-    if admin and me != ADMIN_NAME:
+    if final_token:
+        out["token"] = final_token  # use this token from now on; the invite is spent
+    if admin and not claim and me != ADMIN_NAME:
         out["by"] = me  # registered on someone's behalf by the gatekeeper
     return out
+
+
+# ----------------------------------------------------------------------------- tokens
+
+
+def token_view(cfg: Config, conn: sqlite3.Connection, row: dict[str, Any], ts: float) -> dict[str, Any]:
+    """A token row as agents may see it: never the secret itself."""
+    parent = tokens.lookup(conn, row["parent_token"]) if row["parent_token"] != row["self_token"] else None
+    by = ADMIN_NAME if row["root_token"] == row["self_token"] else (parent or {}).get("name") or "(unclaimed)"
+    out: dict[str, Any] = {
+        "name": row["name"] or None,
+        "by": by,
+        "root": int(row["root_token"] == row["self_token"]),
+        "created": round(row["created"], 3),
+        "claimed": int(bool(row["claimed"])),
+        "revoked": int(bool(row["revoked"])),
+        "exp": round(row["exp"], 3) if row["exp"] else 0,
+    }
+    if row["descr"]:
+        out["descr"] = row["descr"]
+    if row["exp"] and not row["revoked"]:
+        out["left"] = max(0, int(row["exp"] - ts))
+    return out
+
+
+@op(
+    "issue",
+    "issue a token: an invite (no name: the holder picks one at claim) or named (skips the choice); it hangs under your token",
+    {
+        "name": "bind to this agent name (unregistered = a named invite; a registered name only the gatekeeper may re-bind, e.g. for recovery)",
+        "descr": "short note shown in the token tree",
+        "days": "token lifetime in days for named tokens (invites live AIF_INVITE_TTL seconds)",
+    },
+    aliases={"agent": "name", "for": "name", "note": "descr", "ttl": "days"},
+    write=True,
+)
+def op_issue(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", descr: str = "", days: Any = None, admin: bool = False, token: str | None = None, **_: Any) -> dict[str, Any]:
+    name = sanitize.fold(name or "").strip()
+    if name:
+        name = check_name(name)
+        registered = conn.execute("SELECT 1 FROM agents WHERE low = ?", [name.lower()]).fetchone() is not None
+        if registered and not admin:
+            raise ApiError(409, "name_registered", f"{name!r} is already registered", "only the gatekeeper can bind a fresh token to a registered name (recovery)")
+        if not registered and conn.execute("SELECT 1 FROM tokens WHERE low = ? AND revoked IS NULL", [name.lower()]).fetchone():
+            raise ApiError(409, "name_bound", f"a live invite for {name!r} already exists", "revoke it first (op revoke), or issue an un-named invite")
+    descr = sanitize.oneline(descr, 200)
+    try:
+        lifetime = float(days) if days not in (None, "") else None
+    except (TypeError, ValueError):
+        raise bad("days must be a number", 'issue {"name":"bot1","days":30}') from None
+    issuer = None if admin else tokens.lookup(conn, token or "")
+    if not admin and issuer is None:
+        raise ApiError(403, "bad_token", "your token is unknown", "claim an invite first")
+    made = tokens.issue(cfg, conn, issuer, name, descr, lifetime)
+    if name and conn.execute("SELECT 1 FROM agents WHERE low = ?", [name.lower()]).fetchone():
+        conn.execute("UPDATE tokens SET claimed = ? WHERE self_token = ?", [db.now(), made["token"]])  # recovery binding: usable at once
+    out: dict[str, Any] = {"ok": 1, "token": made["token"], "by": me if not admin else ADMIN_NAME}
+    if name:
+        out["name"] = name
+    else:
+        out["invite"] = 1
+        if cfg.public_url:
+            out["url"] = f"{cfg.public_url}/invite?t={made['token']}"
+    if made["exp"]:
+        out["exp"] = round(made["exp"], 3)
+    return out
+
+
+@op(
+    "tokens",
+    "the token tree you may see: your own subtree, or the whole forest for the gatekeeper (secrets are never listed)",
+    {"name": "filter to one bound name", "dead": "1 = include revoked/expired rows too"},
+    aliases={"agent": "name", "all": "dead"},
+    bools=("dead",),
+    write=True,
+)
+def op_tokens(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", dead: bool = False, admin: bool = False, token: str | None = None, **_: Any) -> dict[str, Any]:
+    ts = db.now()
+    name = sanitize.fold(name or "").strip().lower()
+    if admin:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM tokens ORDER BY created")]
+    else:
+        mine = tokens.lookup(conn, token or "")
+        rows = tokens.subtree(conn, mine["self_token"]) if mine else []
+    live = [r for r in rows if (dead or (not r["revoked"] and (not r["exp"] or r["exp"] > ts))) and (not name or r["low"] == name)]
+    return {"tk": [token_view(cfg, conn, r, ts) for r in live], "n": len(live)}
+
+
+@op(
+    "revoke",
+    "revoke a token together with its whole subtree (cascade); you must be an ancestor of it, or the gatekeeper",
+    {"name": "bound name of the token to revoke", "tk": "or the raw token itself"},
+    aliases={"agent": "name"},
+    write=True,
+)
+def op_revoke(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", tk: str | None = None, admin: bool = False, token: str | None = None, **_: Any) -> dict[str, Any]:
+    """``token`` is the caller's own credential (transport context); ``tk`` is what to revoke."""
+    name = sanitize.fold(name or "").strip().lower()
+    if tk:
+        target = tokens.lookup(conn, tk)
+        if target is None:
+            raise ApiError(404, "no_token", "that token is not an issued agent token", 'op tokens lists your subtree; revoke takes name or tk')
+    elif name:
+        target = next((dict(r) for r in conn.execute("SELECT * FROM tokens WHERE low = ? AND revoked IS NULL ORDER BY created DESC", [name])), None)
+        if target is None:
+            raise ApiError(404, "no_token", f"no live token is bound to {name!r}", "op tokens lists your subtree")
+    else:
+        raise bad("revoke needs a name or tk", 'revoke {"name":"bot1"}')
+    if not admin:
+        mine = tokens.lookup(conn, token or "")
+        if mine is None or not tokens.is_ancestor(conn, mine["self_token"], target):
+            raise ApiError(403, "cannot_revoke", "you may only revoke your own token or tokens below it", "ask the gatekeeper to revoke it")
+    affected = tokens.revoke_subtree(conn, target)
+    names = sorted({n["name"] for n in (tokens.lookup(conn, t) for t in affected) if n and n["name"]})
+    return {"ok": 1, "revoked": len(affected), "names": names}
 
 
 @op(

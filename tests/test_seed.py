@@ -5,19 +5,19 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from conftest import Rig, make_cfg
 from fastapi.testclient import TestClient
 
 from aif import db, seed
-from aif.app import create_app
-from aif.config import ADMIN_NAME, Config
-
-TOKEN = "t0ken"
-ADMIN = "admin-secret"
+from aif.config import ADMIN_NAME
 
 
 def make(tmp_path, seed_on=True, ui=False, **overrides) -> TestClient:
-    cfg = Config(tokens=[TOKEN], admin_tokens=[ADMIN], seed=seed_on, data_dir=str(tmp_path), attachments_dir=str(tmp_path / "att"), ui=ui, **overrides)
-    return TestClient(create_app(cfg, mount_ui=ui), headers={"authorization": f"Bearer {TOKEN}"})
+    cfg = make_cfg(tmp_path, seed=seed_on, ui=ui, **overrides)
+    rig = Rig(cfg, ui=ui)
+    client = rig.admin
+    client.rig = rig
+    return client
 
 
 @pytest.fixture()
@@ -74,34 +74,35 @@ def test_seeding_is_idempotent(cli):
 
 
 def test_registration_follows_you_into_both_threads(cli):
-    cli.post("/api/agents", json={"name": "newbie"})
+    cli.rig.claim("newbie")
+    headers = cli.rig.headers("newbie")
     th = threads_by_subject(cli)
-    unread = cli.get("/api/unread", headers={"x-agent": "newbie"}).json()
+    unread = cli.get("/api/unread", headers=headers).json()
     assert [m["i"] for m in unread["ms"]] == [th["READ ME FIRST"]["seq"]]  # the manual, once
-    assert cli.get("/api/unread", headers={"x-agent": "newbie"}).json()["n"] == 0  # and then nothing
-    subs = {s["s"] for s in cli.get("/api/sub", headers={"x-agent": "newbie"}).json()["su"]}
+    assert cli.get("/api/unread", headers=headers).json()["n"] == 0  # and then nothing
+    subs = {s["s"] for s in cli.get("/api/sub", headers=headers).json()["su"]}
     assert subs == {"READ ME FIRST", "CHITCHAT"}
 
 
 def test_chitchat_reaches_every_agent(cli):
     for name in ("one", "two"):
-        cli.post("/api/agents", json={"name": name})
-        cli.get("/api/unread", headers={"x-agent": name})  # clear the READ ME FIRST duty
+        cli.rig.claim(name)
+        cli.get("/api/unread", headers=cli.rig.headers(name))  # clear the READ ME FIRST duty
     th = threads_by_subject(cli)
-    cli.post(f"/api/threads/{th['CHITCHAT']['i']}/msgs", json={"b": "service notice"}, headers={"x-agent": "one"})
-    inbox = cli.get("/api/poll", headers={"x-agent": "two"}).json()
+    cli.post(f"/api/threads/{th['CHITCHAT']['i']}/msgs", json={"b": "service notice"}, headers=cli.rig.headers("one"))
+    inbox = cli.get("/api/poll", headers=cli.rig.headers("two")).json()
     assert inbox["n"] == 1 and inbox["th"] == [{"i": th["CHITCHAT"]["i"], "un": 1}]
-    assert [m["b"] for m in cli.get("/api/unread", headers={"x-agent": "two"}).json()["ms"]] == ["service notice"]
-    assert cli.get("/api/poll", headers={"x-agent": "one"}).json()["n"] == 0  # your own shout is not news
+    assert [m["b"] for m in cli.get("/api/unread", headers=cli.rig.headers("two")).json()["ms"]] == ["service notice"]
+    assert cli.get("/api/poll", headers=cli.rig.headers("one")).json()["n"] == 0  # your own shout is not news
 
 
 def test_agents_registered_before_seeding_get_backfilled(tmp_path):
     cli = make(tmp_path, seed_on=False)
-    cli.post("/api/agents", json={"name": "old-timer"})
+    cli.rig.claim("old-timer")
     assert cli.get("/api/threads").json()["n"] == 0
     with db.session(cli.app.state.cfg) as conn:  # seed.seed itself, bypassing the AIF_SEED switch
         seed.seed(cli.app.state.cfg, conn)
-    unread = cli.get("/api/unread", headers={"x-agent": "old-timer"}).json()
+    unread = cli.get("/api/unread", headers=cli.rig.headers("old-timer")).json()
     assert len(unread["ms"]) == 1 and unread["ms"][0]["a"] == ADMIN_NAME  # the manual, not the welcome
 
 
@@ -109,16 +110,17 @@ def test_agents_registered_before_seeding_get_backfilled(tmp_path):
 
 
 def test_agents_cannot_post_into_the_locked_manual(cli):
-    cli.post("/api/agents", json={"name": "curious"})
+    cli.rig.claim("curious")
+    headers = cli.rig.headers("curious")
     readme = threads_by_subject(cli)["READ ME FIRST"]
-    res = cli.post(f"/api/threads/{readme['i']}/msgs", json={"b": "me too"}, headers={"x-agent": "curious"})
+    res = cli.post(f"/api/threads/{readme['i']}/msgs", json={"b": "me too"}, headers=headers)
     assert res.status_code == 403 and res.json()["err"] == "locked_thread"
-    res = cli.post("/api/threads", json={"subject": "my rules", "b": "x", "lck": 1}, headers={"x-agent": "curious"})
+    res = cli.post("/api/threads", json={"subject": "my rules", "b": "x", "lck": 1}, headers=headers)
     assert res.status_code == 403 and res.json()["err"] == "locked_thread"
 
 
-def test_the_gatekeeper_can_post_into_and_create_locked_threads(cli, tmp_path):
-    admin = TestClient(create_app(cli.app.state.cfg, mount_ui=False), headers={"authorization": f"Bearer {ADMIN}"})
+def test_the_gatekeeper_can_post_into_and_create_locked_threads(cli):
+    admin = cli.rig.admin
     readme = threads_by_subject(cli)["READ ME FIRST"]
     assert admin.post(f"/api/threads/{readme['i']}/msgs", json={"b": "rule change"}).json()["ok"] == 1
     made = admin.post("/api/threads", json={"subject": "MOD LOG", "b": "moderation notes", "lck": 1}).json()
@@ -155,7 +157,6 @@ def test_a_partial_assets_dir_falls_through_to_the_next_candidate(tmp_path):
 def test_seeding_can_be_disabled(tmp_path):
     cli = make(tmp_path, seed_on=False)
     assert cli.get("/api/threads?limit=100").json()["n"] == 0
-    assert cli.get("/api/sub", headers={"x-agent": "ghost"}).status_code == 401  # register first, as usual
 
 
 # ------------------------------------------------------------------------------- the ui
@@ -164,10 +165,11 @@ def test_seeding_can_be_disabled(tmp_path):
 def test_the_ui_marks_the_locked_manual(tmp_path):
     cli = make(tmp_path, ui=True)
     cli.get("/api/ping")
-    listing = cli.get(f"/ui?token={TOKEN}").text
+    from conftest import ADMIN as ADMIN_TOKEN
+    listing = cli.get(f"/ui?token={ADMIN_TOKEN}").text
     assert "🔒 READ ME FIRST" in listing and "CHITCHAT" in listing
     chitchat = threads_by_subject(cli)["CHITCHAT"]
-    page = cli.get(f"/ui/thread/{chitchat['i']}?token={TOKEN}").text
+    page = cli.get(f"/ui/thread/{chitchat['i']}?token={ADMIN_TOKEN}").text
     assert "thread description" in page and "broadcast" in page
 
 
@@ -175,6 +177,7 @@ def test_init_command_seeds_and_reports(tmp_path, monkeypatch):
     from aif.__main__ import main
 
     monkeypatch.setenv("AIF_TOKEN", "cli-token")
+    monkeypatch.setenv("AIF_TOKEN_SALT", "cli-salt")
     assert main(["init", "--data-dir", str(tmp_path / "cli")]) == 0
     con = sqlite3.connect(tmp_path / "cli" / "aif.db")
     subjects = {r[0] for r in con.execute("SELECT subject FROM threads")}

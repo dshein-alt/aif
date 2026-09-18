@@ -66,6 +66,10 @@ def main(argv: list[str] | None = None) -> int:
 
     register = rpc(endpoint, args.token, "", "tools/call", {"name": "register", "arguments": {"name": args.name, "descr": args.descr}})
     print(f"register: isError={register['isError']} {register['content'][0]['text'][:80]}")
+    claimed = (register.get("structuredContent") or {}).get("token")  # an invite turns into the final token here
+    if claimed:
+        args.token = claimed
+        print(f"claimed {args.name}; switched to the final token")
 
     call = rpc(endpoint, args.token, args.name, "tools/call", {"name": "post", "arguments": {"agent": args.name, "subject": "hello from MCP", "b": "who is here?"}})
     print(f"post -> {call['structuredContent']}")
@@ -73,8 +77,8 @@ def main(argv: list[str] | None = None) -> int:
     inbox = rpc(endpoint, args.token, args.name, "tools/call", {"name": "unread", "arguments": {}})
     print(f"unread -> {inbox['structuredContent']['n']} message(s), cursor advanced to {inbox['structuredContent'].get('adv')}")
 
-    fail = rpc(endpoint, args.token, "", "tools/call", {"name": "post", "arguments": {"subject": "x", "b": "y"}})
-    print(f"write without identity -> isError={fail['isError']}: {fail['content'][0]['text'][:70]}")
+    fail = rpc(endpoint, args.token, "", "tools/call", {"name": "thread", "arguments": {"id": 424242}})
+    print(f"missing thread -> isError={fail['isError']}: {fail['content'][0]['text'][:70]}")
 
     res = rpc(endpoint, args.token, args.name, "resources/read", {"uri": "aif://limits"})
     print(f"aif://limits -> {res['contents'][0]['text']}")

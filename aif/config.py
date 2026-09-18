@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field
 
 DEFAULT_TOKEN = "aif-dev-token"
+DEFAULT_SALT = "aif-dev-salt"
 
 #: The service's own system account. It owns seeded content and hands out tokens; no client may
 #: register it, and only a holder of ``AIF_ADMIN_TOKEN`` may act as it.
@@ -56,8 +57,13 @@ def _flag(env: dict[str, str], name: str) -> bool:
 class Config:
     """Every tunable of the service. Use :meth:`from_env` (or the env of the process)."""
 
+    # AIF_TOKEN is an alias of AIF_ADMIN_TOKEN: config-level tokens are *gatekeeper* tokens.
+    # Ordinary agents authenticate with per-agent tokens issued into the DB (see aif/tokens.py).
     tokens: list[str] = field(default_factory=list)
-    admin_tokens: list[str] = field(default_factory=list)  # empty = whatever ``tokens`` holds (AIF_TOKEN is the admin token by default)
+    admin_tokens: list[str] = field(default_factory=list)  # empty = whatever ``tokens`` holds
+    token_salt: str = ""  # AIF_TOKEN_SALT: secret input of the per-agent token derivation
+    invite_ttl: int = 86400  # seconds an unclaimed invite token stays valid
+    public_url: str = ""  # external base URL used to build invite links (e.g. https://aif.example.org)
     data_dir: str = "/data"
     db_path: str = ""  # empty = <data_dir>/aif.db
     attachments_dir: str = ""  # empty = <data_dir>/attachments
@@ -88,16 +94,16 @@ class Config:
 
     @property
     def all_tokens(self) -> list[str]:
-        """Every token this service accepts, admin ones first."""
+        """Every config-level (gatekeeper) token, deduplicated."""
         return [*self.admin_tokens, *[t for t in self.tokens if t not in self.admin_tokens]]
 
-    def agent_token_ok(self, token: str) -> bool:
-        """Does this token grant ordinary agent access? (constant-time against every accepted value)"""
+    def config_token_ok(self, token: str) -> bool:
+        """Is this one of the config-level tokens? (constant-time against every accepted value)"""
         return any(hmac.compare_digest(token, known) for known in self.all_tokens)
 
     def admin_token_ok(self, token: str) -> bool:
-        """Does this token grant gatekeeper privileges?"""
-        return any(hmac.compare_digest(token, known) for known in self.admin_tokens)
+        """Does this token grant gatekeeper privileges? (all config-level tokens do)"""
+        return self.config_token_ok(token)
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
@@ -106,6 +112,9 @@ class Config:
         return cls(
             tokens=[t.strip() for t in _get(env, "AIF_TOKEN", DEFAULT_TOKEN).split(",") if t.strip()],
             admin_tokens=[t.strip() for t in _get(env, "AIF_ADMIN_TOKEN", "").split(",") if t.strip()],
+            token_salt=_get(env, "AIF_TOKEN_SALT", DEFAULT_SALT),
+            invite_ttl=_int(env, "AIF_INVITE_TTL", 86400),
+            public_url=_get(env, "AIF_PUBLIC_URL", "").rstrip("/"),
             data_dir=data_dir,
             db_path=_get(env, "AIF_DB_PATH", os.path.join(data_dir, "aif.db")),
             attachments_dir=_get(env, "AIF_ATTACHMENTS_DIR", os.path.join(data_dir, "attachments")),
@@ -127,8 +136,17 @@ class Config:
     def validate(self) -> list[str]:
         """Fail fast on bad config; returns warnings."""
         warnings: list[str] = []
-        if not self.tokens:
-            raise ConfigError("AIF_TOKEN is empty - refusing to start without a token")
+        if not self.tokens and not self.admin_tokens:
+            raise ConfigError("AIF_TOKEN / AIF_ADMIN_TOKEN are empty - refusing to start without a gatekeeper token")
+        if not self.token_salt:
+            raise ConfigError("AIF_TOKEN_SALT is empty - refusing to start; generate one with: aif token")
+        if self.token_salt == DEFAULT_SALT:
+            if not self.allow_default_token:
+                raise ConfigError(
+                    f"AIF_TOKEN_SALT is the insecure default {DEFAULT_SALT!r}; set a real random salt, "
+                    "or set AIF_ALLOW_DEFAULT_TOKEN=1 to accept it"
+                )
+            warnings.append(f"using insecure default AIF_TOKEN_SALT={DEFAULT_SALT!r}")
         if DEFAULT_TOKEN in self.all_tokens:
             if not self.allow_default_token:
                 raise ConfigError(
@@ -139,6 +157,6 @@ class Config:
         for name in ("max_file_size", "max_files_per_message", "max_message_length", "max_page_size"):
             if getattr(self, name) <= 0:
                 raise ConfigError(f"config {name} must be positive")
-        if self.agent_ttl < 1 or self.upload_ttl < 1:
-            raise ConfigError("AIF_AGENT_TTL and AIF_UPLOAD_TTL must be >= 1")
+        if self.agent_ttl < 1 or self.upload_ttl < 1 or self.invite_ttl < 1:
+            raise ConfigError("AIF_AGENT_TTL, AIF_UPLOAD_TTL and AIF_INVITE_TTL must be >= 1")
         return warnings

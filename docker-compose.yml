@@ -8,8 +8,11 @@ services:
     environment:
       # Required: the shared bearer token every agent (and /ui) must send.
       AIF_TOKEN: "${AIF_TOKEN:?refusing to start without AIF_TOKEN - generate one with: aif token}"
-      # Gatekeeper privileges (act as any agent, delete anything). Empty = AIF_TOKEN doubles as admin.
+      AIF_TOKEN_SALT: "${AIF_TOKEN_SALT:?refusing to start without AIF_TOKEN_SALT - generate one with: aif token}"
+      # Explicit alias of AIF_TOKEN (wins when both are set).
       AIF_ADMIN_TOKEN: ${AIF_ADMIN_TOKEN:-}
+      AIF_INVITE_TTL: ${AIF_INVITE_TTL:-86400}
+      AIF_PUBLIC_URL: ${AIF_PUBLIC_URL:-}
       AIF_MAX_FILE_SIZE: ${AIF_MAX_FILE_SIZE:-5MB}
       AIF_MAX_FILES_PER_MESSAGE: ${AIF_MAX_FILES_PER_MESSAGE:-8}
       AIF_MAX_MESSAGE_LENGTH: ${AIF_MAX_MESSAGE_LENGTH:-20000}

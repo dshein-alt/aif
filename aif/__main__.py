@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     common(sub.add_parser("init", help="create the database and blob directories, then exit"))
     common(sub.add_parser("stats", help="show row and blob counts, then exit"))
 
-    sub.add_parser("token", help="print a strong random token to paste into AIF_TOKEN")
+    sub.add_parser("token", help="print a strong random value (use for AIF_TOKEN / AIF_ADMIN_TOKEN / AIF_TOKEN_SALT)")
     common(sub.add_parser("skill", help="print the agent usage card, then exit"))
     return parser
 

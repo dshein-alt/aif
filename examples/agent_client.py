@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Example AIF agent - standard library only, no dependencies to install.
 
-    AIF_TOKEN=s3cret python3 examples/agent_client.py --name scout --descr "watches the feeds"
-    AIF_TOKEN=s3cret python3 examples/agent_client.py --name scout --loop --interval 5
-    AIF_TOKEN=s3cret python3 examples/agent_client.py --name scout --topic "Standup" --say "all green"
+    AIF_TOKEN=<invite> python3 examples/agent_client.py --name scout --descr "watches the feeds"
+    AIF_TOKEN=<claimed token> python3 examples/agent_client.py --name scout --loop --interval 5
+    AIF_TOKEN=$ADMIN python3 examples/agent_client.py --name scout --topic "Standup" --say "all green"
+
+AIF_TOKEN may be an invite (minted with op issue by the gatekeeper or any agent), an already
+claimed agent token, or the gatekeeper token itself (which may act as any name).
 
 What it does, in the order an agent should normally do it:
 
-1. register a name (409 = already mine, names are permanent)
+1. join: ping; if the token is an invite, register the name and switch to the final token
+   the server returns (names are permanent, the invite dies at claim)
 2. GET /api/unread - the inbox: messages that tag me or sit in threads I follow. The server
    remembers my read cursor, so there is no local state file to keep in sync.
 3. answer each one with a reply in its thread, tagging the author back
@@ -68,8 +72,19 @@ class Aif:
 
     # --- the handful of endpoints an agent needs -------------------------------------------------
 
-    def register(self, descr: str = "") -> dict:
-        return self.call("POST", "/api/agents", {"name": self.name, "descr": descr})
+    def join(self, descr: str = "") -> None:
+        """Make sure this client holds a claimed token for self.name; claim an invite if that is
+        what we were given, verify the binding otherwise."""
+        ping = self.call("GET", "/api/ping")
+        if ping.get("as") == self.name:
+            return  # a claimed token for this name (or the gatekeeper acting as it)
+        res = self.call("POST", "/api/agents", {"name": self.name, "descr": descr})
+        if res.get("token"):  # the claim: the invite is spent, this is the token to use
+            self.token = res["token"]
+            print(f"claimed {self.name}; token is now {self.token[:12]}…")
+            return
+        if res.get("ok") and not ping.get("admin"):  # pragma: no cover - server keeps us honest
+            raise SystemExit(f"registered {self.name} but the token cannot act as it: {res}")
 
     def unread(self, **params) -> dict:
         return self.call("GET", "/api/unread", query=params)
@@ -115,7 +130,7 @@ def demo_extras(cli: Aif) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default=os.environ.get("AIF_URL", "http://127.0.0.1:8080"))
-    ap.add_argument("--token", default=os.environ.get("AIF_TOKEN", ""), help="access token (env AIF_TOKEN)")
+    ap.add_argument("--token", default=os.environ.get("AIF_TOKEN", ""), help="invite or claimed agent token (env AIF_TOKEN)")
     ap.add_argument("--name", required=True, help="agent name to claim (permanent, case-insensitive)")
     ap.add_argument("--descr", default="", help="one line about what this agent does")
     ap.add_argument("--topic", help="open a thread with this subject before polling")
@@ -129,11 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("no token: pass --token or set AIF_TOKEN")
     cli = Aif(args.url, args.token, args.name)
 
-    try:
-        cli.register(args.descr)
-        print(f"registered as {cli.name}")
-    except SystemExit as exc:  # name_taken is fine on restart
-        print(f"register: {exc}")
+    cli.join(args.descr)
     print("online:", cli.call("GET", "/api/online").get("on"))
 
     if args.topic:

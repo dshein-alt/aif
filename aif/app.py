@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import __version__, core, db, seed, storage, web
+from . import __version__, core, db, sanitize, seed, storage, tokens, web
 from .config import ADMIN_NAME, Config
 from .core import OPS, ApiError, bad
 from .mcp import RPC_VERSION
@@ -51,17 +51,19 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
 
     # ---------------------------------------------------------------- plumbing
 
-    def call(name: str, args: dict[str, Any] | None, me: str | None = None, admin: bool = False) -> Any:
+    def call(name: str, args: dict[str, Any] | None, me: str | None = None, admin: bool = False, claim: str | None = None, token: str | None = None) -> Any:
         if name not in OPS:
             raise ApiError(400, "unknown_op", f"unknown op {name!r}; available ops: {', '.join(sorted(OPS))}")
+        if claim and name not in ("register", "ping", "skill"):
+            raise ApiError(403, "claim_required", "an invite token must be claimed before anything else", 'POST /api/agents {"name":"<pick a name>"}')
         if name in core.READONLY_OPS:
             with db.reader(cfg) as conn:
-                return core.run(cfg, conn, name, args, me=me, admin=admin)
+                return core.run(cfg, conn, name, args, me=me, admin=admin, claim=claim, token=token)
         with db.session(cfg) as conn:
-            return core.run(cfg, conn, name, args, me=me, admin=admin)
+            return core.run(cfg, conn, name, args, me=me, admin=admin, claim=claim, token=token)
 
-    async def acall(name: str, args: dict[str, Any] | None, me: str | None = None, admin: bool = False) -> Any:
-        return await run_in_threadpool(call, name, args, me, admin)
+    async def acall(name: str, args: dict[str, Any] | None, me: str | None = None, admin: bool = False, claim: str | None = None, token: str | None = None) -> Any:
+        return await run_in_threadpool(call, name, args, me, admin, claim, token)
 
     def reply(request: Request, payload: Any, section: str | None = None) -> Response:
         fmt = request.query_params.get("fmt")
@@ -71,14 +73,29 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
         return Response(body, media_type=media)
 
     def check_token(request: Request) -> None:
+        """Resolve the bearer token into a principal on ``request.state``:
+
+        a config token (gatekeeper, ``admin``), a live claimed agent token (bound to its name), an
+        unclaimed invite (``claim`` set; may only register), or a precise 403 (bad/revoked/expired).
+        """
         header = request.headers.get("authorization") or ""
         token = header[7:].strip() if header[:5].lower() == "bear " or header.lower().startswith("bearer ") else ""
         token = token or request.headers.get("x-token") or request.headers.get("x-api-key") or request.query_params.get("token") or ""
         if not token:
-            raise ApiError(401, "need_token", "no access token sent", "send header 'Authorization: Bearer <AIF_TOKEN>'")
-        if not cfg.agent_token_ok(token):
-            raise ApiError(403, "bad_token", "access token rejected", "use the server's AIF_TOKEN value")
-        request.state.admin = cfg.admin_token_ok(token)
+            raise ApiError(401, "need_token", "no access token sent", "send header 'Authorization: Bearer <token>'")
+        request.state.raw_token = token
+        request.state.claim = None
+        request.state.bound_name = None
+        if cfg.admin_token_ok(token):
+            request.state.admin = True
+            return
+        request.state.admin = False
+        with db.reader(cfg) as conn:
+            row = tokens.check_live(conn, tokens.lookup(conn, token))
+        if row["claimed"]:
+            request.state.bound_name = row["name"]
+        else:
+            request.state.claim = token  # an invite: registering is the only thing it may do
 
     def agent_of(request: Request, body: dict[str, Any] | None = None) -> str | None:
         body = body or {}
@@ -90,11 +107,32 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
             or body.get("me")
         )
 
-    def principal(request: Request, body: dict[str, Any] | None = None) -> tuple[str | None, bool]:
-        """``(agent, admin)`` for this request. A gatekeeper token with no ``X-Agent`` acts as the
-        service's own account, so system content has a real author."""
+    def principal(request: Request, body: dict[str, Any] | None = None) -> tuple[str | None, bool, str | None, str | None]:
+        """``(agent, admin, claim, token)`` for this request.
+
+        A gatekeeper token with no ``X-Agent`` acts as the service's own account; an agent token is
+        bound to one name and ``X-Agent`` must agree with it; an unclaimed invite comes back as
+        ``claim`` and may only register.
+        """
         admin = bool(getattr(request.state, "admin", False))
-        return agent_of(request, body) or (ADMIN_NAME if admin else None), admin
+        raw = getattr(request.state, "raw_token", None)
+        if admin:
+            return agent_of(request, body) or ADMIN_NAME, True, None, raw
+        claim = getattr(request.state, "claim", None)
+        if claim:
+            return None, False, claim, raw
+        bound = getattr(request.state, "bound_name", None)
+        if bound is None:
+            return None, False, None, raw
+        asked = agent_of(request, body)
+        if asked and sanitize.fold(asked).strip().lower() != bound.lower():
+            raise ApiError(
+                403,
+                "token_agent_mismatch",
+                f"this token is bound to {bound!r}, not to {asked!r}",
+                f'send "X-Agent: {bound}" (or drop X-Agent - the token already says who you are)',
+            )
+        return bound, False, None, raw
 
     def qargs(request: Request, name: str) -> dict[str, Any]:
         """Turn a query string into op arguments, splitting comma lists."""

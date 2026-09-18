@@ -7,67 +7,62 @@ import json
 import time
 
 import pytest
+from conftest import ADMIN, Rig, make_cfg
 from fastapi.testclient import TestClient
 
 from aif import core
 from aif.app import create_app
 from aif.config import Config
 
-TOKEN = "t0ken"
+TOKEN = ADMIN  # the default client speaks as the gatekeeper; agents get claimed tokens via register()
 
 
-ADMIN = "admin-secret"  # the fixture token below is deliberately NOT an admin token
-
-
-def make_client(tmp_path, **overrides) -> TestClient:
-    cfg = Config(
-        tokens=[TOKEN],
-        admin_tokens=[ADMIN],
-        seed=False,
-        data_dir=str(tmp_path),
-        db_path=str(tmp_path / "aif.db"),
-        attachments_dir=str(tmp_path / "attachments"),
-        **overrides,
-    )
-    return TestClient(create_app(cfg, mount_ui=False))
+def make_client(tmp_path, bearer: str | None = ADMIN, **overrides) -> TestClient:
+    cfg = make_cfg(tmp_path, **overrides)
+    client = TestClient(create_app(cfg, mount_ui=False))
+    if bearer is not None:
+        client.headers["authorization"] = f"Bearer {bearer}"
+    client.rig = Rig(cfg)  # second app instance on the same DB; claims real agent tokens
+    return client
 
 
 @pytest.fixture()
 def cli(tmp_path):
-    client = make_client(tmp_path)
-    client.headers["authorization"] = f"Bearer {TOKEN}"
-    return client
+    return make_client(tmp_path)
 
 
 def register(cli, name, **kw):
-    return cli.post("/api/agents", json={"name": name, **kw})
+    """Claim an invite for *name* through the public flow (the gatekeeper issues, the agent registers)."""
+    return cli.rig.claim(name, **kw)
 
 
 def as_agent(cli, name):
-    return {"x-agent": name}
+    """The full credentials of a claimed agent: its own token plus the matching X-Agent."""
+    return cli.rig.headers(name)
 
 
 # ------------------------------------------------------------------------------ auth
 
 
 def test_healthz_is_open(tmp_path):
-    cli = make_client(tmp_path)
+    cli = make_client(tmp_path, bearer=None)
     assert cli.get("/healthz").status_code == 200
     assert cli.get("/api/ping").status_code == 401
 
 
 def test_missing_and_wrong_token(tmp_path):
-    cli = make_client(tmp_path)  # no Authorization header at all
+    cli = make_client(tmp_path, bearer=None)
     body = cli.get("/api/feed")
     assert body.status_code == 401 and body.json()["err"] == "need_token" and "hint" in body.json()
-    wrong = TestClient(create_app(Config(tokens=[TOKEN], seed=False, data_dir=str(tmp_path)), mount_ui=False), headers={"authorization": "Bearer nope"})
+    wrong = TestClient(create_app(make_cfg(tmp_path), mount_ui=False), headers={"authorization": "Bearer nope"})
     res = wrong.get("/api/ping")
     assert res.status_code == 403 and res.json()["err"] == "bad_token"
 
 
-def test_multiple_tokens_accepted(tmp_path):
-    """Several tokens at once lets you rotate a key without downtime."""
-    cli = TestClient(create_app(Config(tokens=["one", "two"], seed=False, data_dir=str(tmp_path)), mount_ui=False))
+def test_multiple_gatekeeper_tokens_accepted(tmp_path):
+    """Comma-separated AIF_ADMIN_TOKEN values let you rotate the admin key without downtime."""
+    cfg = make_cfg(tmp_path, admin_tokens=["one", "two"])
+    cli = TestClient(create_app(cfg, mount_ui=False))
     assert cli.get("/api/ping", headers={"authorization": "Bearer two"}).status_code == 200
     assert cli.get("/api/ping", headers={"authorization": "Bearer three"}).status_code == 403
 
@@ -110,11 +105,20 @@ def test_single_char_and_punctuation_names_ok(cli):
         assert register(cli, name).status_code == 200
 
 
-def test_write_needs_registered_agent(cli):
-    assert cli.post("/api/threads", json={"subject": "s", "b": "x"}).status_code == 401
-    res = cli.post("/api/threads", json={"subject": "s", "b": "x"}, headers=as_agent(cli, "ghost"))
-    body = res.json()
-    assert res.status_code == 401 and body["err"] == "unknown_agent" and "POST /api/agents" in body["hint"]
+def test_the_token_is_the_identity(cli):
+    """A claimed agent token needs no X-Agent: the binding is server-side. A wrong X-Agent is rejected."""
+    register(cli, "a1")
+    anon = cli.rig.client(cli.rig.agent_tokens["a1"])  # no X-Agent at all
+    made = anon.post("/api/threads", json={"subject": "s", "b": "x"})
+    assert made.status_code == 200 and anon.get(f"/api/messages/{made.json()['i']}").json()["a"] == "a1"
+    res = anon.post("/api/threads", json={"subject": "s", "b": "x"}, headers={"x-agent": "ghost"})
+    assert res.status_code == 403 and res.json()["err"] == "token_agent_mismatch"
+    res = anon.post("/api/threads", json={"subject": "s", "b": "x"}, headers={"x-agent": "A1"})  # case is fine
+    assert res.status_code == 200
+    # a token bound to a name that was never registered must be claimed before it can write:
+    pending = cli.rig.issue("ghost2")
+    res = cli.rig.client(pending, **{"x-agent": "ghost2"}).post("/api/threads", json={"subject": "s", "b": "x"})
+    assert res.status_code == 403 and res.json()["err"] == "claim_required"
 
 
 def test_who_reports_presence_and_counts(cli):
@@ -459,9 +463,9 @@ def test_blobs_use_generated_names_in_shards(cli, tmp_path):
 
 
 def test_unattached_uploads_are_purged(tmp_path):
-    cfg = Config(tokens=[TOKEN], seed=False, data_dir=str(tmp_path), db_path=str(tmp_path / "aif.db"), attachments_dir=str(tmp_path / "attachments"), upload_ttl=10)
+    cfg = make_cfg(tmp_path, upload_ttl=10)
     cli = TestClient(create_app(cfg, mount_ui=False))
-    cli.headers["authorization"] = f"Bearer {TOKEN}"
+    cli.rig = Rig(cfg)
     register(cli, "a1")
     key = cli.post("/api/op", json={"do": "up", "name": "temp.txt", "text": "x"}, headers=as_agent(cli, "a1")).json()["k"]
     blob = tmp_path / "attachments" / key[:2] / key
@@ -568,8 +572,9 @@ def test_batch_stop_on_error_and_limits(cli):
     assert nested.status_code == 400 and "nest" in nested.json()["msg"]
 
 
-def test_batch_requires_agent_for_writes(cli):
-    assert cli.post("/api/batch", json={"ops": [{"do": "post", "subject": "s", "b": "x"}]}).status_code == 401
+def test_batch_without_any_token_is_rejected(cli):
+    anon = TestClient(create_app(cli.app.state.cfg, mount_ui=False))
+    assert anon.post("/api/batch", json={"ops": [{"do": "post", "subject": "s", "b": "x"}]}).status_code == 401
 
 
 # ------------------------------------------------------------------ token-friendly IO
@@ -702,9 +707,11 @@ def test_poll_skip_breakdown_and_report_more_threads(cli):
     assert len(cli.get("/api/poll?top=3", headers=as_agent(cli, "a2")).json()["th"]) == 3
 
 
-def test_poll_requires_an_agent_identity(cli):
-    assert cli.get("/api/poll").status_code == 401
+def test_poll_needs_a_token_but_not_a_header(cli):
     register(cli, "a1")
+    anon = cli.rig.client(cli.rig.agent_tokens["a1"])  # the token alone is the identity
+    assert anon.get("/api/poll").status_code == 200
+    assert TestClient(create_app(cli.app.state.cfg, mount_ui=False)).get("/api/poll").status_code == 401
     via_op = cli.post("/api/op", json={"do": "poll"}, headers=as_agent(cli, "a1")).json()
     assert via_op["n"] == 0 and via_op["cursor"] == 0
 

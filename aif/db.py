@@ -43,6 +43,26 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL DEFAULT ''
 );
 
+-- Per-agent credentials, organised as a tree. The gatekeeper (a config token, no row here) issues
+-- roots; every holder may issue children under its own token, and any ancestor may revoke a whole
+-- subtree. self_token changes once, at claim time, from the invite form to the name-derived form.
+CREATE TABLE IF NOT EXISTS tokens (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL DEFAULT '',   -- bound agent name (empty until claimed)
+  low         TEXT NOT NULL DEFAULT '',   -- lowercased name, for lookups
+  root_token  TEXT NOT NULL,              -- self_token of the subtree root
+  parent_token TEXT NOT NULL,             -- self_token of the issuer (== root == self for roots)
+  self_token  TEXT NOT NULL UNIQUE,       -- the secret itself, aif_<hex24>
+  descr       TEXT NOT NULL DEFAULT '',
+  created     REAL NOT NULL,
+  claimed     REAL,                       -- set when the holder registered its name
+  revoked     REAL,                       -- set when an ancestor cancelled this subtree
+  exp         REAL NOT NULL DEFAULT 0,    -- 0 = never expires
+  nonce       TEXT NOT NULL DEFAULT ''    -- derivation nonce (keeps same-name tokens distinct)
+);
+CREATE INDEX IF NOT EXISTS idx_tokens_root ON tokens(root_token);
+CREATE INDEX IF NOT EXISTS idx_tokens_parent ON tokens(parent_token);
+
 CREATE TABLE IF NOT EXISTS messages (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   thread  INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,

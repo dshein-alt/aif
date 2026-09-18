@@ -8,22 +8,23 @@ import subprocess
 import sys
 
 import pytest
+from conftest import ADMIN, Rig, make_cfg
 from fastapi.testclient import TestClient
 
 from aif.app import create_app
-from aif.config import Config
 from aif.core import OPS
 from aif.mcp import INSTRUCTIONS
 
-TOKEN = "t0ken"
+TOKEN = ADMIN  # these fixtures speak with the gatekeeper token; agents are claimed via rig
 
 
 @pytest.fixture()
 def cli(tmp_path):
-    client = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], seed=False, data_dir=str(tmp_path)), mount_ui=True))
-    client.headers["authorization"] = f"Bearer {TOKEN}"
-    client.post("/api/agents", json={"name": "alice", "descr": "first"})
-    client.post("/api/agents", json={"name": "bob"})
+    rig = Rig(make_cfg(tmp_path, ui=True), ui=True)
+    rig.claim("alice", descr="first")
+    rig.claim("bob")
+    client = rig.admin
+    client.rig = rig
     return client
 
 
@@ -68,10 +69,13 @@ def test_mcp_tool_call_read_and_write(cli):
     assert rpc(cli, "tools/call", {"name": "threads", "arguments": {}}).json()["result"]["isError"] is False
 
 
-def test_mcp_write_without_identity_is_a_tool_error(cli):
-    out = rpc(cli, "tools/call", {"name": "post", "arguments": {"subject": "x", "b": "y"}}).json()["result"]
+def test_mcp_an_invite_token_must_be_claimed_first(cli):
+    invite = cli.rig.issue()
+    out = rpc(cli.rig.client(invite), "tools/call", {"name": "post", "arguments": {"subject": "x", "b": "y"}}).json()["result"]
     assert out["isError"] is True
-    assert json.loads(out["content"][0]["text"])["err"] == "need_agent"
+    assert json.loads(out["content"][0]["text"])["err"] == "claim_required"
+    joined = rpc(cli.rig.client(invite), "tools/call", {"name": "register", "arguments": {"name": "mcpjoin"}}).json()["result"]
+    assert joined["isError"] is False and joined["structuredContent"]["token"].startswith("aif_")
 
 
 def test_mcp_tool_errors_carry_hints(cli):
@@ -125,34 +129,33 @@ def test_mcp_instructions_match_the_card():
 
 
 def test_ui_requires_the_token(tmp_path):
-    anon = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], seed=False, data_dir=str(tmp_path)), mount_ui=True))
+    anon = TestClient(create_app(make_cfg(tmp_path, ui=True), mount_ui=True))
     assert anon.get("/ui").status_code == 401
     assert "Access token required" in anon.get("/ui").text
     assert anon.get("/ui?token=nope").status_code == 403
-    assert anon.get("/ui?token=t0ken").status_code == 200
+    assert anon.get(f"/ui?token={TOKEN}").status_code == 200
     assert anon.get("/ui", headers={"authorization": f"Bearer {TOKEN}"}).status_code == 200
 
 
 def test_ui_lists_threads_and_links_with_token(tmp_path):
-    client = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], seed=False, data_dir=str(tmp_path)), mount_ui=True))
-    client.headers["authorization"] = f"Bearer {TOKEN}"
+    client = TestClient(create_app(make_cfg(tmp_path, ui=True), mount_ui=True), headers={"authorization": f"Bearer {TOKEN}"})
     client.post("/api/agents", json={"name": "alice"})
     client.post("/api/threads", json={"subject": "Quarterly plans", "b": "hello"}, headers={"x-agent": "alice"})
-    page = client.get("/ui?token=t0ken").text
-    assert "Quarterly plans" in page and "token=t0ken" in page and "alice" in page
-    assert "/ui/thread/1?token=t0ken" in page
+    page = client.get(f"/ui?token={TOKEN}").text
+    assert "Quarterly plans" in page and f"token={TOKEN}" in page and "alice" in page
+    assert f"/ui/thread/1?token={TOKEN}" in page
     tid = 1
-    detail = client.get(f"/ui/thread/{tid}?token=t0ken").text
-    assert "hello" in detail and "alice" in detail and 'href="/ui?token=t0ken"' in detail
+    detail = client.get(f"/ui/thread/{tid}?token={TOKEN}").text
+    assert "hello" in detail and "alice" in detail and f'href="/ui?token={TOKEN}"' in detail
     assert "Agents" in detail
-    assert "alice" in client.get("/ui/agents?token=t0ken").text
+    assert "alice" in client.get(f"/ui/agents?token={TOKEN}").text
 
 
 def test_ui_escapes_hostile_content(cli):
     cli.post("/api/agents", json={"name": "evil"})
     cli.post("/api/threads", json={"subject": "<script>alert(1)</script>", "b": "<img src=x onerror=alert(1)> @bob"}, headers={"x-agent": "evil"})
-    index = cli.get("/ui?token=t0ken").text
-    detail = cli.get("/ui/thread/1?token=t0ken").text
+    index = cli.get(f"/ui?token={TOKEN}").text
+    detail = cli.get(f"/ui/thread/1?token={TOKEN}").text
     assert "<script>" not in index and "&lt;script&gt;" in index
     assert "<img" not in detail and "onerror" in detail  # escaped, but visible as text
     assert 'class=at' in detail and "@bob" in detail  # mentions highlighted
@@ -165,7 +168,7 @@ def test_ui_shows_attachments_and_pages_them(cli, tmp_path):
         json={"subject": "with file", "b": "see attach", "files": [{"n": "report.txt", "text": "the payload"}]},
         headers={"x-agent": "alice"},
     ).json()
-    detail = cli.get(f"/ui/thread/{made['t']}?token=t0ken").text
+    detail = cli.get(f"/ui/thread/{made['t']}?token={TOKEN}").text
     href = re.search(r'href="(/api/files/\d+/raw[^"]*)"', detail)
     assert href and "report.txt" in detail
     raw = cli.get(href.group(1))
@@ -177,9 +180,9 @@ def test_ui_paging(cli):
     tid = cli.post("/api/threads", json={"subject": "long", "b": "m1"}, headers={"x-agent": "alice"}).json()["t"]
     for i in range(2, 31):
         cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"})
-    page = cli.get(f"/ui/thread/{tid}?token=t0ken").text
+    page = cli.get(f"/ui/thread/{tid}?token={TOKEN}").text
     assert "class=body>m20<" in page and "class=body>m21<" not in page and "class=body>m1<" in page
-    older = cli.get(f"/ui/thread/{tid}?token=t0ken&before=5").text
+    older = cli.get(f"/ui/thread/{tid}?token={TOKEN}&before=5").text
     assert "m4" in older and "m5" not in older
     assert "older" in page or "newer" in page
 
@@ -192,10 +195,10 @@ def test_root_redirects_browsers_to_the_ui(cli):
 
 
 def test_ui_can_be_switched_off(tmp_path):
-    cfg = Config(tokens=[TOKEN], admin_tokens=["admin-secret"], seed=False, data_dir=str(tmp_path / "uioff"))
+    cfg = make_cfg(tmp_path / "uioff", ui=False)
     client = TestClient(create_app(cfg, mount_ui=False))
     client.headers["authorization"] = f"Bearer {TOKEN}"
-    assert client.get("/ui?token=t0ken").status_code == 404
+    assert client.get(f"/ui?token={TOKEN}").status_code == 404
     assert client.get("/api/ping").status_code == 200
 
 
@@ -203,7 +206,7 @@ def test_ui_search(cli):
     cli.post("/api/agents", json={"name": "alice"})
     cli.post("/api/threads", json={"subject": "Mars rover budget", "b": "x"}, headers={"x-agent": "alice"})
     cli.post("/api/threads", json={"subject": "Coffee", "b": "x"}, headers={"x-agent": "alice"})
-    page = cli.get("/ui?token=t0ken&q=mars").text
+    page = cli.get(f"/ui?token={TOKEN}&q=mars").text
     assert "Mars rover budget" in page and "Coffee" not in page
 
 
@@ -217,7 +220,7 @@ def run_cli(*argv, env=None):
         [sys.executable, "-m", "aif", *argv],
         capture_output=True,
         text=True,
-        env={**os.environ, "AIF_TOKEN": "t0ken", **(env or {})},
+        env={**os.environ, "AIF_TOKEN": "t0ken", "AIF_TOKEN_SALT": "cli-salt", **(env or {})},
     )
 
 
@@ -244,7 +247,7 @@ def test_cli_refuses_insecure_default_token(tmp_path):
         [sys.executable, "-m", "aif", "init", "--data-dir", str(tmp_path / "nope")],
         capture_output=True,
         text=True,
-        env={k: v for k, v in os.environ.items() if k != "AIF_TOKEN"},
+        env={k: v for k, v in os.environ.items() if k not in ("AIF_TOKEN", "AIF_TOKEN_SALT")},
     )
     assert res.returncode == 2 and "insecure default" in res.stderr
 

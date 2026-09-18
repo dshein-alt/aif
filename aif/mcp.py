@@ -77,7 +77,7 @@ def prompts() -> list[dict[str, Any]]:
     ]
 
 
-def _op_result(cfg: Config, name: str, args: dict[str, Any], me: str | None, admin: bool = False) -> tuple[Any, bool]:
+def _op_result(cfg: Config, name: str, args: dict[str, Any], me: str | None, admin: bool = False, claim: str | None = None, token: str | None = None) -> tuple[Any, bool]:
     """Run one op for MCP; returns ``(payload, is_error)``."""
     agent = me
     for key in AGENT_KEYS:
@@ -85,18 +85,20 @@ def _op_result(cfg: Config, name: str, args: dict[str, Any], me: str | None, adm
             agent = str(args[key])
     args = {k: v for k, v in args.items() if k not in AGENT_KEYS}
     try:
+        if claim and name not in ("register", "ping", "skill"):
+            raise ApiError(403, "claim_required", "an invite token must be claimed before anything else", 'call the register tool with {"name":"<pick a name>"}')
         if name in READONLY_OPS:  # read-only ops run on a read-only connection
             with db.reader(cfg) as conn:
-                payload = run(cfg, conn, name, args, me=agent, admin=admin)
+                payload = run(cfg, conn, name, args, me=agent, admin=admin, claim=claim, token=token)
         else:
             with db.session(cfg) as conn:
-                payload = run(cfg, conn, name, args, me=agent, admin=admin)
+                payload = run(cfg, conn, name, args, me=agent, admin=admin, claim=claim, token=token)
     except ApiError as exc:
         return exc.body(), True
     return payload, False
 
 
-def _call_tool(cfg: Config, params: dict[str, Any], me: str | None, admin: bool = False) -> dict[str, Any]:
+def _call_tool(cfg: Config, params: dict[str, Any], me: str | None, admin: bool = False, claim: str | None = None, token: str | None = None) -> dict[str, Any]:
     name = str(params.get("name") or "")
     args = params.get("arguments") or {}
     if name not in OPS:
@@ -106,7 +108,7 @@ def _call_tool(cfg: Config, params: dict[str, Any], me: str | None, admin: bool 
         }
     if not isinstance(args, dict):
         return {"content": [{"type": "text", "text": compact({"err": "bad_request", "msg": "arguments must be an object"})}], "isError": True}
-    payload, is_error = _op_result(cfg, name, args, me, admin)
+    payload, is_error = _op_result(cfg, name, args, me, admin, claim, token)
     if name == "skill" and isinstance(payload, dict) and "text" in payload and not is_error:
         text = payload["text"]
     else:
@@ -117,7 +119,7 @@ def _call_tool(cfg: Config, params: dict[str, Any], me: str | None, admin: bool 
     return result
 
 
-def dispatch(cfg: Config, method: str, params: dict[str, Any], me: str | None, admin: bool = False) -> dict[str, Any]:
+def dispatch(cfg: Config, method: str, params: dict[str, Any], me: str | None, admin: bool = False, claim: str | None = None, token: str | None = None) -> dict[str, Any]:
     if method == "initialize":
         wanted = str(params.get("protocolVersion") or DEFAULT_PROTOCOL)
         return {
@@ -133,7 +135,7 @@ def dispatch(cfg: Config, method: str, params: dict[str, Any], me: str | None, a
     if method == "tools/list":
         return {"tools": tools()}
     if method == "tools/call":
-        return _call_tool(cfg, params, me, admin)
+        return _call_tool(cfg, params, me, admin, claim, token)
     if method == "resources/list":
         return {"resources": resources()}
     if method == "resources/read":
@@ -166,7 +168,7 @@ def dispatch(cfg: Config, method: str, params: dict[str, Any], me: str | None, a
     raise JsonRpcError(-32601, f"method not found: {method}", {"methods": ["initialize", "ping", "tools/list", "tools/call", "resources/list", "resources/read", "prompts/list", "prompts/get"]})
 
 
-def one(cfg: Config, request: dict[str, Any], me: str | None = None, admin: bool = False) -> dict[str, Any] | None:
+def one(cfg: Config, request: dict[str, Any], me: str | None = None, admin: bool = False, claim: str | None = None, token: str | None = None) -> dict[str, Any] | None:
     """Handle a single JSON-RPC request; ``None`` means 'a notification, no response body'."""
     if not isinstance(request, dict) or request.get("method") in (None, ""):
         rid = request.get("id") if isinstance(request, dict) else None
@@ -175,7 +177,7 @@ def one(cfg: Config, request: dict[str, Any], me: str | None = None, admin: bool
     params = request.get("params") if isinstance(request.get("params"), dict) else {}
     notification = rid is None
     try:
-        result = dispatch(cfg, method, params, me, admin)
+        result = dispatch(cfg, method, params, me, admin, claim, token)
     except JsonRpcError as exc:
         return None if notification else _err(rid, exc.code, exc.message, exc.data)
     except Exception as exc:  # pragma: no cover - defensive, keeps the transport alive
@@ -183,9 +185,9 @@ def one(cfg: Config, request: dict[str, Any], me: str | None = None, admin: bool
     return None if notification else {"jsonrpc": RPC_VERSION, "id": rid, "result": result}
 
 
-def handle(cfg: Config, payload: Any, me: str | None = None, admin: bool = False) -> Any:
+def handle(cfg: Config, payload: Any, me: str | None = None, admin: bool = False, claim: str | None = None, token: str | None = None) -> Any:
     """Entry point for ``POST /mcp`` (single request, notification, or JSON-RPC batch)."""
     if isinstance(payload, list):
-        responses = [one(cfg, item, me, admin) for item in payload]
+        responses = [one(cfg, item, me, admin, claim, token) for item in payload]
         return [item for item in responses if item is not None] or None
-    return one(cfg, payload, me, admin)
+    return one(cfg, payload, me, admin, claim, token)

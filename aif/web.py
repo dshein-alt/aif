@@ -102,8 +102,8 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
         )
         if not candidate:
             raise ApiError(401, "need_token", "this view needs the access token", "open /ui?token=<AIF_TOKEN>")
-        if not cfg.agent_token_ok(candidate):
-            raise ApiError(403, "bad_token", "access token rejected", "use the server's AIF_TOKEN value")
+        if not cfg.config_token_ok(candidate):  # /ui is for humans: config tokens only, never agent tokens
+            raise ApiError(403, "bad_token", "access token rejected", "open /ui with the gatekeeper token")
         return candidate
 
     def link(token: str, path: str, **params: Any) -> str:

@@ -228,6 +228,53 @@ def test_thread_pagination(cli):
     }
     assert cli.get(f"/api/threads/{tid}?limit=0").json()["err"] == "bad_request"
 
+
+def test_thread_pages_by_position_and_numbers_posts(cli):
+    """``offset`` is paging by position (1-based pages), ``nums=1`` says which post each row is."""
+    register(cli, "a1")
+    hdr = as_agent(cli, "a1")
+    tid = cli.post("/api/threads", json={"subject": "many", "b": "m1"}, headers=hdr).json()["t"]
+    for i in range(2, 12):
+        cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers=hdr)
+
+    third = cli.get(f"/api/threads/{tid}?limit=3&offset=6").json()
+    assert [m["b"] for m in third["ms"]] == ["m7", "m8", "m9"]
+    assert third["offset"] == 6 and third["limit"] == 3 and third["has_more"] is True
+    assert third["msgs"] == 11  # the total is in every page: ceil(11/3) is the page count
+    assert cli.get(f"/api/threads/{tid}?limit=3&offset=9").json()["has_more"] is False
+
+    numbered = cli.get(f"/api/threads/{tid}?limit=3&offset=6&nums=1").json()
+    assert [m["no"] for m in numbered["ms"]] == [7, 8, 9]
+    assert [m["no"] for m in cli.get(f"/api/threads/{tid}?limit=2&nums=1").json()["ms"]] == [1, 2]
+    # numbers are positions in the thread, not positions in the reply: a backward page still counts
+    # from the top, and long keys carry the same number as "post"
+    back = cli.get(f"/api/threads/{tid}?limit=3&before=6&order=desc&nums=1").json()
+    assert [m["no"] for m in back["ms"]] == [3, 4, 5]
+    assert [m["post"] for m in cli.get(f"/api/threads/{tid}?limit=2&nums=1&long=1").json()["ms"]] == [1, 2]
+
+    # a position and a cursor are two ways to say where to read from: picking both is a bug, not a merge
+    for combo in ("offset=1&since=1", "offset=3&before=6"):
+        res = cli.get(f"/api/threads/{tid}?{combo}")
+        assert res.status_code == 400 and res.json()["err"] == "bad_request"
+    assert cli.get(f"/api/threads/{tid}?limit=2&offset=-4").json()["offset"] == 0  # clamped, not fatal
+
+    # cursor paging is untouched by all of this
+    cursor = cli.get(f"/api/threads/{tid}?limit=3&since=6").json()
+    assert [m["b"] for m in cursor["ms"]] == ["m7", "m8", "m9"] and cursor.get("nums") is None
+    assert "no" not in cli.get(f"/api/threads/{tid}?limit=2").json()["ms"][0]  # opt-in only
+
+
+def test_post_numbers_are_positions_not_identities(cli):
+    register(cli, "a1")
+    hdr = as_agent(cli, "a1")
+    tid = cli.post("/api/threads", json={"subject": "shift", "b": "m1"}, headers=hdr).json()["t"]
+    ids = [cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers=hdr).json()["i"] for i in range(2, 5)]
+    assert [m["no"] for m in cli.get(f"/api/threads/{tid}?nums=1&body=0").json()["ms"]] == [1, 2, 3, 4]
+    cli.delete(f"/api/messages/{ids[0]}", headers=hdr)  # delete post #2
+    after = cli.get(f"/api/threads/{tid}?nums=1&body=0").json()
+    assert [m["no"] for m in after["ms"]] == [1, 2, 3]  # everything after it moved up, as documented
+    assert [m["b"] for m in cli.get(f"/api/threads/{tid}").json()["ms"]][1:] == ["m3", "m4"]
+
 def test_limit_is_clamped_to_max_page_size(tmp_path):
     cli = make_client(tmp_path, max_page_size=3)
     cli.headers["authorization"] = f"Bearer {TOKEN}"

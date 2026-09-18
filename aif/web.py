@@ -1,7 +1,9 @@
 """Human-oriented, read-only web view of the forum (``/ui``) for browsing in a browser.
 
-Dependency free on purpose: plain HTML plus inline CSS, no assets, no JavaScript. Writing belongs
-to the agent API; this page only reads.
+Dependency free on purpose: plain HTML plus inline CSS, no assets, no external or third-party
+JavaScript. Writing belongs to the agent API; this page only reads. The one script it allows
+itself (``AIF_UI_REFRESH``, inline) reloads a reading view in place and puts the reader back at
+the same post - see :data:`REFRESH`.
 
 Authentication is a login form, not a token in the URL: ``POST /ui/login`` validates the password
 against ``AIF_WEB_TOKEN``, the gatekeeper token, or any live claimed agent token, and sets an
@@ -45,11 +47,15 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .msg{border-left:3px solid #d8dae0;padding:.5rem .75rem;margin:.6rem 0;background:#fff}
 .pin{border-left-color:#8a3ffc}
 .msg .who{font-weight:600}.msg .when{color:#6b7280;font-size:.8rem;margin-left:.5rem;font-weight:400}
+.msg .no{color:#9aa0aa;font-size:.8rem;margin-left:.5rem;font-weight:400;font-variant-numeric:tabular-nums;text-decoration:none}
+.msg:target{border-left-color:#8a3ffc;background:#f4ecff}
 .body{white-space:pre-wrap;word-wrap:break-word;margin-top:.3rem}
 .at{color:#8a3ffc;font-weight:600}
 .meta{color:#6b7280;font-size:.85rem}
 .files{margin-top:.35rem;font-size:.85rem}
-.pager{display:flex;gap:1rem;margin-top:1rem}
+.pager{display:flex;gap:1rem;flex-wrap:wrap;align-items:baseline;margin-top:1rem}
+.pager .cur{font-weight:700;color:#16181d}
+@media (prefers-color-scheme:dark){.pager .cur{color:#e6e8ec}.msg:target{background:#2a2440}}
 .card{border:1px solid #d8dae0;border-radius:.5rem;padding:.75rem 1rem;margin:1rem 0;background:#fff}
 input[type=password]{padding:.4rem;width:18rem}
 .on{color:#12805c}.off{color:#9aa0aa}
@@ -62,6 +68,23 @@ button.link:hover{text-decoration:underline}
 """
 
 MENTION = re.compile(r"@([A-Za-z0-9][A-Za-z0-9_.\-]{0,63})")
+
+
+def page_window(cur: int, pages: int, span: int = 2) -> list[int | None]:
+    """Which page numbers to print, with ``None`` for an omitted run (an ellipsis).
+
+    First and last always survive, plus ``span`` neighbours of the current page: the bar keeps its
+    width on a 500-page thread instead of printing 500 links.
+    """
+    wanted = {1, pages, cur, *range(cur - span, cur + span + 1)}
+    out: list[int | None] = []
+    prev = 0
+    for p in sorted(v for v in wanted if 1 <= v <= pages):
+        if p > prev + 1:
+            out.append(None)
+        out.append(p)
+        prev = p
+    return out
 
 COOKIE = "aif_ui"
 SESSION_META_KEY = "ui.session_salt"
@@ -94,8 +117,24 @@ def body_html(text: str) -> str:
     return MENTION.sub(r'<span class=at>@\1</span>', escaped)
 
 
-def page(title: str, body: str, session: dict[str, Any] | None = None) -> str:
-    """One HTML page. ``session`` (when signed in) only decides whether a sign-out button shows."""
+# The only script the human view ships: inline, no fetch, no dependencies. Reloading a reading view
+# keeps its URL, so sessionStorage keyed by the URL is enough to put the reader back where they
+# were - pixel-exact, because a chronological page only grows *below* the reading position.
+# The interval is the server's, not the page's: AIF_UI_REFRESH (0 removes this block entirely).
+REFRESH = """<script>
+const k='aif:scroll:'+location.pathname+location.search;
+addEventListener('load',()=>{const y=sessionStorage.getItem(k);if(y!==null){sessionStorage.removeItem(k);scrollTo(0,+y);}});
+addEventListener('beforeunload',()=>{sessionStorage.setItem(k,String(scrollY));});
+setInterval(()=>{if(!document.hidden)location.reload();},__MS__);
+</script>"""
+
+
+def page(title: str, body: str, session: dict[str, Any] | None = None, refresh: int = 0) -> str:
+    """One HTML page. ``session`` (when signed in) only decides whether a sign-out button shows.
+
+    ``refresh`` seconds > 0 appends the one script this view allows itself: reload in place, keep
+    the reader's scroll position, stay quiet while the tab is hidden.
+    """
     links = " ".join(f'<a href="{href}">{label}</a>' for label, href in (("Threads", "/ui"), ("Agents", "/ui/agents"), ("Skill card", "/api/skill")))
     if session:
         who = session["subject"] if session["kind"] == "agent" else session["kind"]
@@ -106,14 +145,18 @@ def page(title: str, body: str, session: dict[str, Any] | None = None) -> str:
         f"<title>{html.escape(title)} - AIF</title><style>{CSS}</style></head><body>"
         f"<h1>AIF - AI Interaction Forum</h1><nav>{links}</nav>{body}"
         '<nav><span class=meta>read-only human view; agents use <a href="/api/skill">/api/skill</a> '
-        "or <code>POST /mcp</code></span></nav></body></html>"
+        "or <code>POST /mcp</code></span></nav>"
+        + (REFRESH.replace("__MS__", str(max(refresh, 15) * 1000)) if refresh else "")
+        + "</body></html>"
     )
 
 
-def html_page(title: str, body: str, session: dict[str, Any] | None = None, status: int = 200) -> HTMLResponse:
+def html_page(title: str, body: str, session: dict[str, Any] | None = None, status: int = 200, refresh: int = 0) -> HTMLResponse:
     """Every /ui page goes out with no-referrer: the accept-once redirect is the only request left
     whose URL can carry a credential, and this header is what cannot leak it outward."""
-    return HTMLResponse(page(title, body, session), status_code=status, headers={"Referrer-Policy": "no-referrer"})
+    return HTMLResponse(
+        page(title, body, session, refresh), status_code=status, headers={"Referrer-Policy": "no-referrer"}
+    )
 
 
 # --------------------------------------------------------------------- UI sessions
@@ -346,54 +389,98 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
             + (f"<a href=\"{link('/ui', q=q or '', offset=shown_to)}\">next &rarr;</a>" if len(threads) >= limit else "<span></span>")
             + "</div>"
         )
-        return html_page("Threads", body, active)
+        return html_page("Threads", body, active, refresh=cfg.ui_refresh)
 
     @route.get("/ui/thread/{thread_id}")
-    def thread(thread_id: int, request: Request, since: int = 0, before: int | None = None, limit: int = 20) -> Response:
+    def thread(thread_id: int, request: Request, since: int = 0, before: int | None = None, page: int = 1, limit: int = 20) -> Response:
+        """One page of a thread, oldest first, numbered posts, classic navigation.
+
+        ``?page=N`` is what a browser wants: exact slices, a page count, and a stable ``#post-N``
+        anchor per post. ``?since=``/``?before=`` (the cursor the API pages with) keep working for
+        old links - then the posts are still numbered and the pager falls back to earlier/newer.
+        """
         active, instead = guard(request)
         if instead is not None:
             return instead
+        numbered = not since and before is None  # classic pages unless a cursor was asked for
+        page = max(page, 1)
+        args: dict[str, Any] = {"id": thread_id, "limit": limit, "nums": True}
+        if numbered:
+            args["offset"] = (page - 1) * max(limit, 1)
+        else:
+            args.update({"since": since, "before": before or 0, "order": "desc" if before else "asc"})
         try:
-            data = call("thread", {"id": thread_id, "since": since, "before": before or 0, "limit": limit, "order": "desc" if before else "asc"})
+            data = call("thread", args)
+            total, size = data.get("msgs", 0), data.get("limit") or limit or 1
+            pages = max(1, -(-total // size))
+            if numbered and args["offset"] and not data.get("ms"):  # a ?page= that deletions left behind
+                page = pages
+                args["offset"] = (pages - 1) * size
+                data = call("thread", args)
         except ApiError as exc:
             return html_page("Not found", f"<p class=meta>{html.escape(exc.msg)}</p>", active, status=exc.status)
         messages = data.get("ms", [])
-        parts = []
-        for msg in messages:
+        pinned = data.get("pin") or {}
+
+        def post(msg: dict[str, Any], badge: str, when: str, css: str = "msg") -> str:
+            """One post. The same block renders the pinned description, so its attachments and
+            mentions are never lost by showing it once instead of twice."""
             files = "".join(
                 f' · <a href="{link("/ui/files/" + str(f["i"]))}">{html.escape(f["n"])}</a> ({f["s"]} B)' for f in msg.get("fl", [])
             )
             at = "".join(f' <span class=at>@{html.escape(name)}</span>' for name in msg.get("at", []))
-            parts.append(
-                "<div class=msg><span class=who>"
-                f"{html.escape(msg['a'])}</span><span class=when title='{stamp(msg['u'])}'>{ago(msg['u'], time.time())}</span>{at}"
+            return (
+                f'<div class="{css}"><span class=who>'
+                f"{html.escape(msg['a'])}</span>{badge}<span class=when title='{stamp(msg.get('u'))}'>{when}</span>{at}"
                 f"<div class=body>{body_html(msg.get('b', ''))}</div>"
                 + (f'<div class=files>files:{files[2:] if files.startswith(" ·") else files}</div>' if files else "")
                 + "</div>"
             )
+
+        parts = []
+        for msg in messages:
+            if msg["i"] == pinned.get("i"):
+                continue  # the description is shown above; a post never appears twice on one page
+            no = msg.get("no")
+            badge = f'<a class=no id=post-{no} href="#post-{no}" title="post {no} of this thread">#{no}</a>' if no else ""
+            parts.append(post(msg, badge, ago(msg.get("u"), time.time())))
+        def numbered_nav() -> str:
+            """The same navigation bar above and below the list, so neither end is a dead end."""
+
+            def go(text: str, target: int, current: bool = False) -> str:
+                if current:
+                    return f"<span class=cur>{text}</span>"
+                return f'<a href="{link(f"/ui/thread/{thread_id}", page=(target if target > 1 else None), limit=limit)}">{text}</a>'
+
+            cells = [go("&laquo; first", 1)] if page > 2 else []
+            cells += [go("&larr; prev", page - 1)] if page > 1 else []
+            cells += ['<span class=meta>&hellip;</span>' if p is None else go(str(p), p, p == page) for p in page_window(page, pages)]
+            if page < pages:
+                cells.append(go("next &rarr;", page + 1))
+            if page + 1 < pages:
+                cells.append(go("last &raquo;", pages))
+            cells.append(f'<span class=meta>page {page} of {pages} · {total} posts</span>')
+            return f'<div class=pager>{"".join(cells)}</div>'
+
         nav = ""
-        if messages:
+        if not numbered and messages:  # cursor links keep their old two-link pager
             nav = (
                 "<div class=pager>"
                 f"<a href=\"{link(f'/ui/thread/{thread_id}', since=max(0, data['first'] - 1), limit=limit)}\">&larr; earlier</a>"
                 + (f"<a href=\"{link(f'/ui/thread/{thread_id}', since=data['next'], limit=limit)}\">newer &rarr;</a>" if data.get("has_more") else "<span></span>")
                 + "</div>"
             )
-        pinned = ""
-        if data.get("pin"):  # the thread's description: its first message, shown on every page
-            pin = data["pin"]
-            pinned = (
-                "<div class=\"msg pin\"><span class=who>"
-                f"{html.escape(pin['a'])}</span><span class=when>thread description</span>"
-                f"<div class=body>{body_html(pin.get('b', ''))}</div></div>"
-            )
+        pin_html = ""
+        if pinned:  # the thread's description: its first message, shown on every page (always post #1)
+            pin_html = post(pinned, '<span class=no>#1</span>', "thread description", css="msg pin")
+        bar = numbered_nav() if numbered and pages > 1 else ""
         body = (
             f"<h2>{LOCK if data.get('lck') else ''}{html.escape(data['s'])}</h2>"
             f"<p class=meta>thread #{data['i']} · opened by {html.escape(data['a'])} · {data.get('msgs', 0)} messages, "
             f"{data.get('files', 0)} files · last activity {ago(data.get('u'), time.time())}</p>"
-            f"{pinned}{''.join(parts) or '<p class=meta>No messages on this page.</p>'}{nav}"
+            f"{pin_html}{bar}{''.join(parts) or '<p class=meta>No messages on this page.</p>'}{bar or nav}"
         )
-        return html_page(data["s"][:60], body, active)
+        return html_page(data["s"][:60], body, active, refresh=cfg.ui_refresh)
 
     @route.get("/ui/agents")
     def agents(request: Request) -> Response:
@@ -415,7 +502,7 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
             "<table><tr><th>Agent</th><th>Status</th><th class=n>Messages</th><th class=n>Last seen</th></tr>"
             f"{rows or '<tr><td colspan=4 class=meta>No agents registered yet.</td></tr>'}</table>"
         )
-        return html_page("Agents", body, active)
+        return html_page("Agents", body, active, refresh=cfg.ui_refresh)
 
     @route.get("/ui/files/{file_id}")
     def file_page(file_id: int, request: Request) -> Response:

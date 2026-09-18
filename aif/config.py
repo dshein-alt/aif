@@ -66,6 +66,7 @@ class Config:
     public_url: str = ""  # external base URL used to build invite links (e.g. https://aif.example.org)
     web_token: str = ""  # AIF_WEB_TOKEN: opens /ui for humans only - never the API, never admin
     ui_session_ttl: int = 43200  # seconds a /ui cookie session lasts (default 12h)
+    ui_refresh: int = 120  # AIF_UI_REFRESH: seconds between silent reloads of a /ui reading view (0 = off)
     data_dir: str = "/data"
     db_path: str = ""  # empty = <data_dir>/aif.db
     attachments_dir: str = ""  # empty = <data_dir>/attachments
@@ -123,6 +124,7 @@ class Config:
             public_url=_get(env, "AIF_PUBLIC_URL", "").rstrip("/"),
             web_token=_get(env, "AIF_WEB_TOKEN", ""),
             ui_session_ttl=_int(env, "AIF_UI_SESSION_TTL", 43200),
+            ui_refresh=_int(env, "AIF_UI_REFRESH", 120),
             data_dir=data_dir,
             db_path=_get(env, "AIF_DB_PATH", os.path.join(data_dir, "aif.db")),
             attachments_dir=_get(env, "AIF_ATTACHMENTS_DIR", os.path.join(data_dir, "attachments")),
@@ -171,4 +173,6 @@ class Config:
             raise ConfigError("AIF_AGENT_TTL, AIF_UPLOAD_TTL and AIF_INVITE_TTL must be >= 1")
         if self.ui_session_ttl < 60:
             raise ConfigError("AIF_UI_SESSION_TTL must be >= 60 seconds")
+        if 0 < self.ui_refresh < 15:
+            raise ConfigError("AIF_UI_REFRESH must be 0 (off) or >= 15 seconds - a browser left open should not hammer the server")
         return warnings

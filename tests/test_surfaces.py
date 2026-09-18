@@ -12,6 +12,7 @@ from conftest import ADMIN, Rig, make_cfg
 from fastapi.testclient import TestClient
 
 from aif.app import create_app
+from aif.config import ConfigError
 from aif.core import OPS
 from aif.mcp import INSTRUCTIONS
 
@@ -157,7 +158,8 @@ def test_ui_escapes_hostile_content(cli):
     cli.post("/api/threads", json={"subject": "<script>alert(1)</script>", "b": "<img src=x onerror=alert(1)> @bob"}, headers={"x-agent": "evil"})
     index = cli.get(f"/ui?token={TOKEN}").text
     detail = cli.get(f"/ui/thread/1?token={TOKEN}").text
-    assert "<script>" not in index and "&lt;script&gt;" in index
+    assert "<script>alert" not in index and "&lt;script&gt;" in index  # the payload stays text
+    assert index.count("<script>") == 1 and "<script src=" not in index  # only the inline auto-refresh
     assert "<img" not in detail and "onerror" in detail  # escaped, but visible as text
     assert 'class=at' in detail and "@bob" in detail  # mentions highlighted
 
@@ -189,7 +191,76 @@ def test_ui_paging(cli):
     assert "class=body>m20<" in page and "class=body>m21<" not in page and "class=body>m1<" in page
     older = cli.get(f"/ui/thread/{tid}?token={TOKEN}&before=5").text
     assert "m4" in older and "m5" not in older
-    assert "older" in page or "newer" in page
+    assert "page 1 of 2" in page  # numbered navigation, not just older/newer
+
+
+def test_ui_thread_pages_are_numbered_and_navigable(cli):
+    tid = cli.post("/api/threads", json={"subject": "long", "b": "m1"}, headers={"x-agent": "alice"}).json()["t"]
+    for i in range(2, 31):
+        cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"})
+
+    first = cli.get(f"/ui/thread/{tid}?token={TOKEN}&limit=10").text  # accept-once cookies us
+    assert "class=body>m10<" in first and "class=body>m11<" not in first
+    assert first.count("class=body>m1<") == 1  # the description shows once, not twice
+    assert "<span class=no>#1</span>" in first  # ... and says which post it is
+    assert "page 1 of 3" in first and first.count("class=pager") == 2  # above *and* below the list
+    assert 'id=post-2' in first and 'id=post-10' in first and 'id=post-11' not in first
+    assert "page=1" not in first  # page 1 is the default: its links stay clean
+
+    second = cli.get(f"/ui/thread/{tid}?page=2&limit=10").text
+    assert "class=body>m11<" in second and "class=body>m20<" in second and "class=body>m21<" not in second
+    assert "page 2 of 3" in second and 'id=post-11' in second and 'href="#post-11"' in second
+    assert "prev" in second and "page=3" in second and "first" not in second  # page 1 is one click back
+    assert f'href="/ui/thread/{tid}?limit=10"' in second  # back to page 1 without a page= in the URL
+
+    last = cli.get(f"/ui/thread/{tid}?page=3&limit=10").text
+    assert "class=body>m21<" in last and "class=body>m30<" in last
+    assert "page 3 of 3" in last and "next" not in last and "first" in last and 'id=post-30' in last
+
+    stale = cli.get(f"/ui/thread/{tid}?page=99&limit=10").text  # a page that deletions left behind
+    assert "page 3 of 3" in stale and "class=body>m30<" in stale
+
+    whole = cli.get(f"/ui/thread/{tid}?limit=500").text
+    assert "class=pager" not in whole and "page 1 of 1" not in whole  # one page needs no bar
+    assert "class=body>m1<" in whole and "class=body>m30<" in whole  # oldest first, newest last
+
+
+def test_ui_cursor_links_still_number_posts(cli):
+    tid = cli.post("/api/threads", json={"subject": "long", "b": "m1"}, headers={"x-agent": "alice"}).json()["t"]
+    for i in range(2, 31):
+        cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"})
+    cli.get(f"/ui?token={TOKEN}")  # accept-once: the cookie carries the session from here on
+    older = cli.get(f"/ui/thread/{tid}?before=15&limit=5").text
+    assert "class=body>m10<" in older and "class=body>m14<" in older and "class=body>m15<" not in older
+    assert 'id=post-10' in older and 'id=post-14' in older  # numbered by position, cursor or not
+    assert "earlier" in older and "page " not in older  # the old two-link pager, no page bar
+
+
+def test_ui_reading_views_reload_in_place(tmp_path):
+    """A thread left open follows the conversation without throwing the reader back to the top."""
+    rig = Rig(make_cfg(tmp_path, ui=True, ui_refresh=90), ui=True)
+    rig.claim("alice")
+    cli = rig.admin
+    tid = cli.post("/api/threads", json={"subject": "reader", "b": "m1"}, headers={"x-agent": "alice"}).json()["t"]
+    cli.get(f"/ui/thread/{tid}?token={ADMIN}")  # accept-once, then the cookie is enough
+    for url in ("/ui", f"/ui/thread/{tid}", "/ui/agents"):
+        reading = cli.get(url).text
+        assert "sessionStorage" in reading and "90000" in reading and "document.hidden" in reading
+        assert "<script src=" not in reading  # inline only: still no assets and nothing third-party
+    assert "<script" not in cli.get("/ui/files/99999").text  # an error page ships nothing
+
+
+def test_ui_auto_refresh_can_be_turned_off(tmp_path):
+    rig = Rig(make_cfg(tmp_path, ui=True, ui_refresh=0), ui=True)
+    cli = rig.admin
+    cli.get(f"/ui?token={ADMIN}")
+    assert "<script" not in cli.get("/ui").text
+
+
+def test_ui_refresh_below_the_floor_is_refused(tmp_path):
+    """An interval of a few seconds would turn every open tab into a load generator."""
+    with pytest.raises(ConfigError):
+        make_cfg(tmp_path, ui=True, ui_refresh=5).validate()
 
 
 def test_root_redirects_browsers_to_the_ui(cli):

@@ -871,6 +871,7 @@ def op_threads(
         "msgs": "0 = metadata only (default 1)",
         "since": "page forward: messages with id > since (feed \"next\" back in)",
         "before": "page backward: messages with id < before",
+        "offset": "skip this many messages: page by position (1-based pages = offset+1); cannot combine with since/before",
         "limit": "max messages per page (default 20, max 500)",
         "order": "asc|desc (desc + limit 1 = last message only)",
         "max_body": "truncate each message body to N chars (0 = full)",
@@ -878,11 +879,12 @@ def op_threads(
         "files": "0 = omit attachment lists",
         "read": "1 = mark the thread read up to the newest message shown (needs X-Agent)",
         "unread": "1 = include how many messages I have not read here",
+        "nums": "1 = number each message by its position in the thread (field 'no', 1 = first post)",
         "pin": "0 = skip the pinned first message (the thread's description, shown on every page by default)",
     },
     aliases={"i": "id", "thread": "id", "messages": "msgs", "after": "since", "max_chars": "max_body", "upto": "before", "pinned": "pin", "description": "pin"},
-    bools=("msgs", "body", "files", "read", "unread", "pin"),
-    ints=("id", "since", "before", "limit", "max_body"),
+    bools=("msgs", "body", "files", "read", "unread", "pin", "nums"),
+    ints=("id", "since", "before", "offset", "limit", "max_body"),
 )
 def op_thread(
     cfg: Config,
@@ -891,6 +893,7 @@ def op_thread(
     msgs: bool = True,
     since: int = 0,
     before: int | None = None,
+    offset: int = 0,
     limit: int | None = None,
     order: str = "asc",
     max_body: int = 0,
@@ -898,6 +901,7 @@ def op_thread(
     files: bool = True,
     read: bool = False,
     unread: bool = False,
+    nums: bool = False,
     me: str | None = None,
     long: bool = False,
     pin: bool = True,
@@ -905,6 +909,9 @@ def op_thread(
 ) -> dict[str, Any]:
     if id is None:
         raise bad("thread needs id", 'thread {"id":3}')
+    offset = max(offset or 0, 0)
+    if offset and (since or before):
+        raise bad("thread offset does not combine with since or before", "pick one: offset for numbered pages, a cursor to walk a thread")
     row = conn.execute("SELECT * FROM threads WHERE id = ?", [id]).fetchone()
     if row is None:
         raise ApiError(404, "no_thread", f"thread {id} does not exist", "GET /api/threads?q=<word> to find threads")
@@ -930,13 +937,22 @@ def op_thread(
         where.append("id < ?")
         args.append(before)
     rows = conn.execute(
-        f"SELECT * FROM messages {db.where(where)} ORDER BY id {db.desc(backwards)} LIMIT ?",
-        [*args, limit + 1],
+        f"SELECT * FROM messages {db.where(where)} ORDER BY id {db.desc(backwards)} LIMIT ? OFFSET ?",
+        [*args, limit + 1, offset],
     ).fetchall()
     page = rows[:limit]
     if backwards:
         page = page[::-1]  # always hand back chronological order
+    out["limit"] = limit  # the page size actually used (clamped), so a reader can count pages
+    out["offset"] = offset
     out["ms"] = load_messages(cfg, conn, page, max_body, long)
+    if nums and page:
+        # one count for the whole page: a page is a contiguous id-ordered slice, so the ranks of
+        # its rows are consecutive - no per-row subquery, no drift between surfaces
+        base = conn.execute("SELECT COUNT(*) c FROM messages WHERE thread = ? AND id <= ?", [id, page[0]["id"]]).fetchone()["c"] - 1
+        key = "post" if long else "no"
+        for step, shaped in enumerate(out["ms"], start=1):
+            shaped[key] = base + step
     if not body:
         for m in out["ms"]:
             m.pop("b", None)

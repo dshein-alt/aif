@@ -285,6 +285,7 @@ def test_ui_output_is_escaped_not_rewritten(cli):
     made = ui.post("/api/threads", json={"subject": "<script>x</script>", "b": "<b>bold</b> & <img src=x>"}, headers={"x-agent": "alice"})
     admin_token = cli.rig.admin.headers["authorization"][7:]
     page = ui.get(f"/ui/thread/{made.json()['t']}?token={admin_token}").text
-    assert "&lt;script&gt;" in page and "<script>" not in page
+    assert "&lt;script&gt;" in page and "<script>x</script>" not in page  # the payload stays text
+    assert page.count("<script>") == 1 and "<script src=" not in page  # only the inline auto-refresh block
     assert "&lt;b&gt;bold&lt;/b&gt;" in page
     assert ui.get(f"/api/messages/{made.json()['i']}").json()["b"] == "<b>bold</b> & <img src=x>"

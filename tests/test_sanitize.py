@@ -26,6 +26,7 @@ from aif.app import create_app
 
 TOKEN = "t0ken"
 ALLOWED_CALLS = {"where", "marks", "desc", "sort_expr", "like_arg", "now"}
+DB_MODULE = "db"  # the only receiver those builders may be called on
 SRC = pathlib.Path(__file__).resolve().parent.parent / "aif"
 
 PROBES = [
@@ -56,6 +57,23 @@ def _sql_nodes():
                     yield path, node.lineno, node.args[0]
 
 
+def _is_db_helper(node: ast.AST) -> bool:
+    """Is this a call to one of ``db``'s fragment builders?
+
+    The receiver is checked, not only the method name: ``db.where(...)`` joins constant fragments,
+    while some other object's ``.where(request_text)`` is exactly the injection this audit exists
+    to catch. One predicate for both the f-string and the concatenation branch, so they cannot
+    drift apart.
+    """
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ALLOWED_CALLS
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == DB_MODULE
+    )
+
+
 def _interpolations(node: ast.AST) -> list[str]:
     """Names/expressions interpolated into a SQL string, excluding the whitelisted builders."""
     offenders: list[str] = []
@@ -63,8 +81,7 @@ def _interpolations(node: ast.AST) -> list[str]:
         if isinstance(sub, ast.FormattedValue):
             expr = sub.value
             is_constant = isinstance(expr, ast.Name) and expr.id.isupper() and len(expr.id) > 2
-            is_helper = isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr in ALLOWED_CALLS
-            if not (is_constant or is_helper):
+            if not (is_constant or _is_db_helper(expr)):
                 offenders.append(ast.unparse(expr))
         if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Mod):
             offenders.append("%-format: " + ast.unparse(sub))
@@ -98,10 +115,23 @@ def test_statements_only_concatenate_constants():
             if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Add):
                 for leaf in _sum_leaves(sub):
                     is_constant = isinstance(leaf, (ast.Constant, ast.JoinedStr)) or (isinstance(leaf, ast.Name) and leaf.id.isupper() and len(leaf.id) > 2)
-                    is_helper = isinstance(leaf, ast.Call) and isinstance(leaf.func, ast.Attribute) and leaf.func.attr in ALLOWED_CALLS
-                    if not (is_constant or is_helper):
+                    if not (is_constant or _is_db_helper(leaf)):
                         bad.append(f"{path.name}:{lineno}: {ast.unparse(leaf)}")
     assert not bad, "SQL fragments must be literals or CONSTANTS:\n" + "\n".join(bad)
+
+
+def test_the_audit_checks_the_receiver_not_just_the_method_name():
+    """A whitelisted method name on some other object must not pass for ``db``'s own builder."""
+    intended = ast.parse('conn.execute("SELECT 1 FROM tokens " + db.where(["low = ?"]))')
+    impostor = ast.parse('conn.execute("SELECT * FROM t WHERE " + evil.where(user_text))')
+    plain = ast.parse('conn.execute("SELECT * FROM t WHERE " + user_text)')
+
+    def leaves(tree):
+        return [leaf for sub in ast.walk(tree) if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Add) for leaf in _sum_leaves(sub)]
+
+    assert any(_is_db_helper(leaf) for leaf in leaves(intended))
+    assert not any(_is_db_helper(leaf) for leaf in leaves(impostor))  # the hole this test closes
+    assert not any(_is_db_helper(leaf) for leaf in leaves(plain))
 
 
 # ---------------------------------------------------------------- sanitiser unit tests

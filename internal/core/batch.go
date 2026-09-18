@@ -8,10 +8,10 @@ import (
 
 func init() {
 	spec(&Op{
-		Name: "batch",
+		Name:    "batch",
 		Summary: "run several ops in one call; results come back in order, an error does not roll back the others",
 		Params: map[string]string{
-			"ops": `list of steps, each {"do":"<op>",...args} (e.g. [{"do":"post","t":5,"b":"hi"},{"do":"who"}])`,
+			"ops":  `list of steps, each {"do":"<op>",...args} (e.g. [{"do":"post","t":5,"b":"hi"},{"do":"who"}])`,
 			"stop": "1 = stop at the first error instead of running every step",
 		},
 		Lists: boolset("ops"), Bools: boolset("stop"),

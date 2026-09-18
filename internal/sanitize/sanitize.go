@@ -33,7 +33,7 @@ func drop(ch rune) bool {
 	// Unicode Cc (control), Cf (format), Co (private), Cs (surrogate), Zl, Zp categories.
 	switch {
 	case ch == 0x7F || (ch >= 0x00 && ch <= 0x1F), // Cc (ASCII control)
-		ch >= 0x80 && ch <= 0x9F, // C1 controls (Cc)
+		ch >= 0x80 && ch <= 0x9F,     // C1 controls (Cc)
 		ch == 0x2028 || ch == 0x2029, // Zl Zp
 		unicode.Is(unicode.Cf, ch):
 		return true

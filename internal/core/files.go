@@ -16,16 +16,16 @@ import (
 
 func init() {
 	spec(&Op{
-		Name: "up",
+		Name:    "up",
 		Summary: "upload one small file, returns its key; pass keys to post as files=[{\"k\":key}]",
-		Params: map[string]string{"name": "display file name", "text": "file content as text", "b64": "file content, base64", "type": "mime type"},
+		Params:  map[string]string{"name": "display file name", "text": "file content as text", "b64": "file content, base64", "type": "mime type"},
 		Aliases: alias("n", "name", "content", "text", "file", "name"),
 		Handler: opUp,
 	})
 	spec(&Op{
-		Name: "dl",
+		Name:    "dl",
 		Summary: "read an attached file: metadata by default; text=1 embeds the content (text or base64)",
-		Params: map[string]string{"id": "file id (message fl[].i)", "text": "1 = embed content", "b64": "1 = force base64 content"},
+		Params:  map[string]string{"id": "file id (message fl[].i)", "text": "1 = embed content", "b64": "1 = force base64 content"},
 		Aliases: alias("i", "id", "file", "id"),
 		Bools:   boolset("text", "b64"), Ints: boolset("id"),
 		Handler: opDl,

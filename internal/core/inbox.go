@@ -29,16 +29,16 @@ const InboxFrom = `
 
 func init() {
 	spec(&Op{
-		Name: "sub",
+		Name:    "sub",
 		Summary: "follow threads to get their new messages in your unread box (you are auto-subscribed when you post or are tagged)",
-		Params: map[string]string{"t": "thread id to subscribe to", "off": "1 = unsubscribe instead (with t)", "all": "1 = subscribe to every existing thread (with t absent)", "list": "0 = do not return the subscription list", "seen": "read mark for a new subscription (default: today's last message)"},
+		Params:  map[string]string{"t": "thread id to subscribe to", "off": "1 = unsubscribe instead (with t)", "all": "1 = subscribe to every existing thread (with t absent)", "list": "0 = do not return the subscription list", "seen": "read mark for a new subscription (default: today's last message)"},
 		Aliases: alias("i", "t", "id", "t", "thread", "t", "unsubscribe", "off", "unsub", "off"),
 		Ints:    boolset("t", "seen"), Bools: boolset("off", "all", "list"),
 		Write: true, WantsMe: true,
 		Handler: opSub,
 	})
 	spec(&Op{
-		Name: "poll",
+		Name:    "poll",
 		Summary: "cheap 'is there anything for me?' check: how many messages, which threads, no bodies, no cursor movement",
 		Params: map[string]string{
 			"advance": "1 = also clear them (moves the same cursors unread does); default 0 = just look",
@@ -53,27 +53,27 @@ func init() {
 		Handler: opPoll,
 	})
 	spec(&Op{
-		Name: "unread",
+		Name:    "unread",
 		Summary: "your inbox: new messages that tag you or sit in a thread you follow; advances your cursor by default",
-		Params: map[string]string{"advance": "0 = peek without clearing (default 1 = mark them read)", "limit": "max messages (default 50)", "max_body": "truncate bodies (default 400, 0 = full)", "threads": "0 = skip per-thread unread counts", "subs": "0 = skip the subscription list", "mine": "1 = include your own posts"},
+		Params:  map[string]string{"advance": "0 = peek without clearing (default 1 = mark them read)", "limit": "max messages (default 50)", "max_body": "truncate bodies (default 400, 0 = full)", "threads": "0 = skip per-thread unread counts", "subs": "0 = skip the subscription list", "mine": "1 = include your own posts"},
 		Aliases: alias("clear", "advance", "peek", "advance", "max_chars", "max_body", "su", "subs"),
 		Bools:   boolset("advance", "threads", "subs", "mine"), Ints: boolset("limit", "max_body"),
 		Write: true, WantsMe: true,
 		Handler: opUnread,
 	})
 	spec(&Op{
-		Name: "seen",
+		Name:    "seen",
 		Summary: "move your read cursors: globally (all messages up to N) and/or per subscribed thread",
-		Params: map[string]string{"seq": "global cursor: mark every message id <= seq as read; 0 = everything now", "t": "thread id whose per-thread cursor to move", "all": "1 = mark every thread you follow as read", "read": "mark value for t (default: newest message of that thread)"},
+		Params:  map[string]string{"seq": "global cursor: mark every message id <= seq as read; 0 = everything now", "t": "thread id whose per-thread cursor to move", "all": "1 = mark every thread you follow as read", "read": "mark value for t (default: newest message of that thread)"},
 		Aliases: alias("i", "t", "thread", "t", "cursor", "seq", "mark", "read"),
 		Ints:    boolset("seq", "t", "read"), Bools: boolset("all"),
 		Write: true, WantsMe: true,
 		Handler: opSeen,
 	})
 	spec(&Op{
-		Name: "feed",
+		Name:    "feed",
 		Summary: "one call = everything needed to act: new messages since a cursor, who is online, threads touched, my mentions",
-		Params: map[string]string{"since": "cursor: newest message id already seen (0 = from the beginning)", "limit": "max messages (default 50)", "threads": "0 = skip thread summaries", "on": "0 = skip the online name list", "men": "0 = skip message ids that tag me", "max_body": "truncate message text (default 400, 0 = full)"},
+		Params:  map[string]string{"since": "cursor: newest message id already seen (0 = from the beginning)", "limit": "max messages (default 50)", "threads": "0 = skip thread summaries", "on": "0 = skip the online name list", "men": "0 = skip message ids that tag me", "max_body": "truncate message text (default 400, 0 = full)"},
 		Aliases: alias("after", "since", "cursor", "since", "online", "on", "mentions", "men", "max_chars", "max_body"),
 		Bools:   boolset("threads", "on", "men"), Ints: boolset("since", "limit", "max_body"),
 		WantsLong: true, WantsMe: true,

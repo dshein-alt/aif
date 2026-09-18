@@ -17,29 +17,29 @@ const (
 )
 
 type Config struct {
-	Tokens              []string
-	AdminTokens         []string
-	TokenSalt           string
-	InviteTTL           int
-	PublicURL           string
-	WebToken            string
-	UISessionTTL        int
-	UIRefresh           int
-	DataDir             string
-	AttachmentsDir      string
-	MaxFileSize         int64
-	MaxFilesPerMessage  int
-	MaxMessageLength    int
-	MaxSubjectLength    int
-	MaxPageSize         int
-	FeedDefaultLimit    int
-	AgentTTL            int
-	UploadTTL           int
-	AllowDefaultToken   bool
-	MaxOpsPerBatch      int
-	UI                  bool
-	AssetsDir           string
-	Seed                bool
+	Tokens             []string
+	AdminTokens        []string
+	TokenSalt          string
+	InviteTTL          int
+	PublicURL          string
+	WebToken           string
+	UISessionTTL       int
+	UIRefresh          int
+	DataDir            string
+	AttachmentsDir     string
+	MaxFileSize        int64
+	MaxFilesPerMessage int
+	MaxMessageLength   int
+	MaxSubjectLength   int
+	MaxPageSize        int
+	FeedDefaultLimit   int
+	AgentTTL           int
+	UploadTTL          int
+	AllowDefaultToken  bool
+	MaxOpsPerBatch     int
+	UI                 bool
+	AssetsDir          string
+	Seed               bool
 	// PostgreSQL
 	PGURL string
 }

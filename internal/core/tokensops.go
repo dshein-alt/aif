@@ -14,7 +14,7 @@ import (
 
 func init() {
 	spec(&Op{
-		Name: "issue",
+		Name:    "issue",
 		Summary: "issue a token: an invite (no name) or named; it hangs under your token",
 		Params: map[string]string{
 			"name":  "bind to this agent name (unregistered = a named invite; re-binding a registered name is gatekeeper-only)",
@@ -26,18 +26,18 @@ func init() {
 		Handler: opIssue,
 	})
 	spec(&Op{
-		Name: "tokens",
+		Name:    "tokens",
 		Summary: "the token tree you may see: your own subtree, or the whole forest for the gatekeeper (secrets are never listed)",
-		Params: map[string]string{"name": "filter to one bound name", "dead": "1 = include revoked/expired rows", "limit": "max rows (default 50)", "offset": "paging"},
+		Params:  map[string]string{"name": "filter to one bound name", "dead": "1 = include revoked/expired rows", "limit": "max rows (default 50)", "offset": "paging"},
 		Aliases: alias("agent", "name", "all", "dead"),
 		Ints:    boolset("limit", "offset"), Bools: boolset("dead"),
 		Write: true, WantsMe: true, WantsAdmin: true, WantsToken: true,
 		Handler: opTokens,
 	})
 	spec(&Op{
-		Name: "revoke",
+		Name:    "revoke",
 		Summary: "revoke a token together with its whole subtree (cascade); you must be an ancestor of it, or the gatekeeper",
-		Params: map[string]string{"name": "bound name of the token to revoke", "tk": "or the raw token itself"},
+		Params:  map[string]string{"name": "bound name of the token to revoke", "tk": "or the raw token itself"},
 		Aliases: alias("agent", "name"),
 		Write:   true, WantsMe: true, WantsAdmin: true, WantsToken: true,
 		Handler: opRevoke,

@@ -19,7 +19,7 @@ const ThreadCols = `t.id, t.subject, t.author, t.created, t.last, t.active, t.lo
 
 func init() {
 	spec(&Op{
-		Name: "post",
+		Name:    "post",
 		Summary: "post a message; omit t to start a new thread. Tag agents with at=[names] or @name in the text",
 		Params: map[string]string{
 			"t":       "thread id to reply to (omit to create a thread)",
@@ -34,10 +34,10 @@ func init() {
 		Ints:    boolset("t"), Bools: boolset("full", "lck"), Lists: boolset("at", "files"),
 		Schemas: map[string]any{"files": map[string]any{
 			"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{
-				"k": map[string]any{"type": "string", "description": "upload key from op up / POST /api/files"},
-				"n": map[string]any{"type": "string", "description": "file name for an inline upload"},
+				"k":    map[string]any{"type": "string", "description": "upload key from op up / POST /api/files"},
+				"n":    map[string]any{"type": "string", "description": "file name for an inline upload"},
 				"text": map[string]any{"type": "string", "description": "inline file content as text"},
-				"b64": map[string]any{"type": "string", "description": "inline file content, base64"},
+				"b64":  map[string]any{"type": "string", "description": "inline file content, base64"},
 				"type": map[string]any{"type": "string", "description": "mime type"},
 			}, "additionalProperties": false},
 		}},
@@ -45,7 +45,7 @@ func init() {
 		Handler: opPost,
 	})
 	spec(&Op{
-		Name: "threads",
+		Name:    "threads",
 		Summary: "find/list threads - plain text search over subjects, authors and tags",
 		Params: map[string]string{
 			"q": "text to match in subject, author or tagged agents", "by": "filter by author name", "at": "filter by tagged agent name",
@@ -58,7 +58,7 @@ func init() {
 		Handler:   opThreads,
 	})
 	spec(&Op{
-		Name: "thread",
+		Name:    "thread",
 		Summary: "read one page of a thread: metadata plus messages (cursor based, never the whole history)",
 		Params: map[string]string{
 			"id": "thread id", "msgs": "0 = metadata only (default 1)", "since": "page forward: messages with id > since",
@@ -68,9 +68,9 @@ func init() {
 			"unread": "1 = include how many I have not read here", "nums": "1 = number each message by position (field 'no')",
 			"pin": "0 = skip the pinned first message (the description)",
 		},
-		Aliases: alias("i", "id", "thread", "id", "messages", "msgs", "after", "since", "max_chars", "max_body", "upto", "before", "pinned", "pin", "description", "pin"),
-		Bools:   boolset("msgs", "body", "files", "read", "unread", "pin", "nums"),
-		Ints:    boolset("id", "since", "before", "offset", "limit", "max_body"),
+		Aliases:   alias("i", "id", "thread", "id", "messages", "msgs", "after", "since", "max_chars", "max_body", "upto", "before", "pinned", "pin", "description", "pin"),
+		Bools:     boolset("msgs", "body", "files", "read", "unread", "pin", "nums"),
+		Ints:      boolset("id", "since", "before", "offset", "limit", "max_body"),
 		WantsLong: true, WantsMe: true,
 		Handler: opThread,
 	})

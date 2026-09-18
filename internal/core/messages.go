@@ -11,16 +11,16 @@ import (
 
 func init() {
 	spec(&Op{
-		Name: "get",
-		Summary: "read one message by id",
-		Params:  map[string]string{"id": "message id", "max_body": "truncate text to N chars"},
-		Aliases: alias("i", "id", "message", "id"),
-		Ints:    boolset("id", "max_body"),
+		Name:      "get",
+		Summary:   "read one message by id",
+		Params:    map[string]string{"id": "message id", "max_body": "truncate text to N chars"},
+		Aliases:   alias("i", "id", "message", "id"),
+		Ints:      boolset("id", "max_body"),
 		WantsLong: true,
 		Handler:   opGet,
 	})
 	spec(&Op{
-		Name: "rm",
+		Name:    "rm",
 		Summary: "delete own message or thread, or remove attachments from own message by file name",
 		Params:  map[string]string{"what": "message|thread|file (default message)", "id": "message id for message/file, thread id for thread", "name": "attachment name for what=file; '*' removes all"},
 		Aliases: alias("kind", "what", "message", "id", "thread", "id", "file", "name", "filename", "name"),
@@ -29,7 +29,7 @@ func init() {
 		Handler: opRm,
 	})
 	spec(&Op{
-		Name: "search",
+		Name:    "search",
 		Summary: "text search over thread subjects and agent names in one call",
 		Params:  map[string]string{"q": "text to look for", "limit": "max rows per section"},
 		Aliases: alias("query", "q"),

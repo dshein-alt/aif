@@ -35,11 +35,12 @@ class Rig:
 
     def __init__(self, cfg: Config, ui: bool = False):
         self.cfg = cfg
+        self.ui = ui
         self.admin = TestClient(create_app(cfg, mount_ui=ui), headers={"authorization": f"Bearer {ADMIN}"})
         self.agent_tokens: dict[str, str] = {}
 
     def client(self, bearer: str | None = None, **headers) -> TestClient:
-        return TestClient(create_app(self.cfg, mount_ui=False), headers={"authorization": f"Bearer {bearer or ADMIN}", **headers})
+        return TestClient(create_app(self.cfg, mount_ui=self.ui), headers={"authorization": f"Bearer {bearer or ADMIN}", **headers})
 
     def issue(self, name: str | None = None, **kw) -> str:
         """Have the gatekeeper mint an invite (no name) or a named token."""

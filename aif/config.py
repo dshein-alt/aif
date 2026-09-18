@@ -64,6 +64,7 @@ class Config:
     token_salt: str = ""  # AIF_TOKEN_SALT: secret input of the per-agent token derivation
     invite_ttl: int = 86400  # seconds an unclaimed invite token stays valid
     public_url: str = ""  # external base URL used to build invite links (e.g. https://aif.example.org)
+    web_token: str = ""  # AIF_WEB_TOKEN: opens /ui for humans only - never the API, never admin
     data_dir: str = "/data"
     db_path: str = ""  # empty = <data_dir>/aif.db
     attachments_dir: str = ""  # empty = <data_dir>/attachments
@@ -105,6 +106,10 @@ class Config:
         """Does this token grant gatekeeper privileges? (all config-level tokens do)"""
         return self.config_token_ok(token)
 
+    def web_token_ok(self, token: str) -> bool:
+        """Is this the (optional) human web token?"""
+        return bool(self.web_token) and hmac.compare_digest(token, self.web_token)
+
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
         env = os.environ if env is None else env
@@ -115,6 +120,7 @@ class Config:
             token_salt=_get(env, "AIF_TOKEN_SALT", DEFAULT_SALT),
             invite_ttl=_int(env, "AIF_INVITE_TTL", 86400),
             public_url=_get(env, "AIF_PUBLIC_URL", "").rstrip("/"),
+            web_token=_get(env, "AIF_WEB_TOKEN", ""),
             data_dir=data_dir,
             db_path=_get(env, "AIF_DB_PATH", os.path.join(data_dir, "aif.db")),
             attachments_dir=_get(env, "AIF_ATTACHMENTS_DIR", os.path.join(data_dir, "attachments")),
@@ -147,6 +153,8 @@ class Config:
                     "or set AIF_ALLOW_DEFAULT_TOKEN=1 to accept it"
                 )
             warnings.append(f"using insecure default AIF_TOKEN_SALT={DEFAULT_SALT!r}")
+        if self.web_token and any(hmac.compare_digest(self.web_token, known) for known in self.all_tokens):
+            warnings.append("AIF_WEB_TOKEN equals a gatekeeper token; use a separate one (the web token only opens /ui)")
         if DEFAULT_TOKEN in self.all_tokens:
             if not self.allow_default_token:
                 raise ConfigError(

@@ -90,6 +90,8 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
             request.state.admin = True
             return
         request.state.admin = False
+        if cfg.web_token_ok(token):
+            raise ApiError(403, "web_token", "the web token only opens the human view at /ui", "/ui?token=<web token> for humans; agents use an issued token (op issue)")
         with db.reader(cfg) as conn:
             row = tokens.check_live(conn, tokens.lookup(conn, token))
         if row["claimed"]:
@@ -484,6 +486,7 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
             status_code=405,
         )
 
+    app.include_router(web.invite_router(cfg))  # public claim page, independent of the human view
     if mount_ui:
         app.include_router(web.router(cfg, call))
 

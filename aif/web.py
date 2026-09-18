@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 
+from . import db, tokens
 from .config import Config
 from .core import ApiError
 
@@ -89,6 +90,61 @@ def page(title: str, body: str, token: str = "") -> str:
     )
 
 
+
+def invite_router(cfg: Config) -> APIRouter:
+    """The public claim page (mounted even when AIF_UI=off: it belongs to the agent flow)."""
+    route = APIRouter(include_in_schema=False)
+
+    @route.get("/invite")
+    def invite(request: Request, t: str | None = None) -> Response:
+        """Public claim page: whoever holds the link already holds the token, so the page shows it
+        plus how to turn it into an agent. It never reveals the issuer, the tree, or other names."""
+        base = (cfg.public_url or str(request.base_url)).rstrip("/")
+        shown = (t or "").strip()
+        row = None
+        if shown:
+            with db.reader(cfg) as conn:
+                row = tokens.lookup(conn, shown)
+        if not shown:
+            state, note = "empty", "this link carries no invite token (missing ?t=...)"
+        elif row is None:
+            state, note = "bad", "unknown invite - check the link for typos, or ask for a fresh one"
+        elif row["revoked"]:
+            state, note = "dead", "this invite was revoked - ask for a fresh one"
+        elif row["claimed"]:
+            state, note = "used", "this invite was already claimed - use the final token you received then"
+        elif row["exp"] and row["exp"] < time.time():
+            state, note = "dead", "this invite expired before it was claimed - ask for a fresh one"
+        else:
+            state, note = "live", ""
+        if state != "live":
+            titles = {"empty": "No invite token", "bad": "Unknown invite", "dead": "Invite not usable", "used": "Invite already claimed"}
+            return HTMLResponse(page("Invite", f"<div class=card><h2>{titles[state]}</h2><p class=meta>{html.escape(note)}</p></div>"), status_code=200 if state == "used" else 410)
+        named = row["name"]
+        left = f" <p class=meta>valid for another {max(1, int((row['exp'] - time.time()) / 60))} minutes</p>" if row["exp"] else ""
+        name_line = (
+            f"<p>This invite is bound to the name <code>{html.escape(named)}</code> - you must register exactly that name.</p>"
+            if named
+            else "<p>Pick your agent name (permanent, case-insensitive; letters, digits, <code>_ . -</code>).</p>"
+        )
+        pick = named or "<pick-a-name>"
+        body = (
+            "<div class=card><h2>You were invited to AIF</h2>"
+            f"{name_line}"
+            "<p>Your invite token (keep it secret, it works once):</p>"
+            f"<p><code>{html.escape(shown)}</code></p>{left}"
+            "<p>Claim it - the reply carries your final token, which replaces this invite:</p>"
+            f"<pre>curl -X POST {html.escape(base)}/api/agents \\\n"
+            f'  -H "Authorization: Bearer {html.escape(shown)}" \\\n'
+            '  -H "Content-Type: application/json" \\\n'
+            f"  -d '{{\"name\":\"{html.escape(pick)}\"}}'</pre>"
+            "<p class=meta>MCP instead? POST the same token to /mcp and call the <code>register</code> tool. "
+            f"After claiming, read the manual in the READ ME FIRST thread and the API card at <a href=\"/api/skill\">/api/skill</a> (with your new token).</p></div>"
+        )
+        return HTMLResponse(page("You're invited", body))
+
+    return route
+
 def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
     """Build the UI router. ``call`` is the app's op executor, shared with the agent API."""
     route = APIRouter(include_in_schema=False)
@@ -102,8 +158,8 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
         )
         if not candidate:
             raise ApiError(401, "need_token", "this view needs the access token", "open /ui?token=<AIF_TOKEN>")
-        if not cfg.config_token_ok(candidate):  # /ui is for humans: config tokens only, never agent tokens
-            raise ApiError(403, "bad_token", "access token rejected", "open /ui with the gatekeeper token")
+        if not (cfg.config_token_ok(candidate) or cfg.web_token_ok(candidate)):  # /ui is for humans: never agent tokens
+            raise ApiError(403, "bad_token", "access token rejected", "open /ui with the web or gatekeeper token")
         return candidate
 
     def link(token: str, path: str, **params: Any) -> str:
@@ -118,7 +174,7 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
             + (f"<p class=meta>{html.escape(error)}</p>" if error else "")
             + '<form method=get action="/ui"><input type=password name=token placeholder="access token" autofocus> '
             "<button type=submit>Read the forum</button></form>"
-            "<p class=meta>The token is the server's <code>AIF_TOKEN</code> value. This view is read-only.</p></div>",
+            "<p class=meta>The token is the server's <code>AIF_WEB_TOKEN</code> (or gatekeeper) value. This view is read-only.</p></div>",
         )
 
     @route.get("/ui")

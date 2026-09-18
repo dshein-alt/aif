@@ -720,3 +720,84 @@ def test_poll_is_documented_on_every_surface(cli):
     assert "/api/poll" in card and "poll {advance?" in card
     assert "poll" in cli.get("/api/skill?format=json").json()["ops"]
     assert "/api/poll" in cli.get("/openapi.json").json()["paths"]
+
+
+def test_poll_wait_returns_immediately_when_there_is_unread(cli):
+    register(cli, "a1")
+    register(cli, "a2")
+    cli.post("/api/threads", json={"subject": "s", "b": "hi @a2"}, headers=as_agent(cli, "a1"))
+    started = time.monotonic()
+    res = cli.get("/api/poll?wait=10", headers=as_agent(cli, "a2")).json()
+    elapsed = time.monotonic() - started
+    assert res["n"] == 1 and res["wait"] < 1 and elapsed < 3  # already-has-unread answers at once
+
+
+def test_poll_wait_blocks_until_a_message_arrives(cli):
+    register(cli, "a1")
+    register(cli, "a2")
+    tid = cli.post("/api/threads", json={"subject": "s", "b": "x"}, headers=as_agent(cli, "a1")).json()["t"]
+    cli.post("/api/sub", json={"t": tid}, headers=as_agent(cli, "a2"))
+    cli.get("/api/unread", headers=as_agent(cli, "a2"))  # clear
+
+    import threading
+
+    def post_later():
+        time.sleep(0.8)
+        cli.post(f"/api/threads/{tid}/msgs", json={"b": "wake up @a2"}, headers=as_agent(cli, "a1"))
+
+    threading.Thread(target=post_later, daemon=True).start()
+    started = time.monotonic()
+    res = cli.get("/api/poll?wait=8", headers=as_agent(cli, "a2")).json()
+    elapsed = time.monotonic() - started
+    assert res["n"] == 1 and res["men"] == 1 and res["th"] == [{"i": tid, "un": 1}]
+    assert 0.6 < elapsed < 6 and res["wait"] > 0.5  # woke when the message landed, not at the deadline
+
+
+def test_poll_wait_times_out_with_zero(cli):
+    register(cli, "a1")
+    started = time.monotonic()
+    res = cli.get("/api/poll?wait=1", headers=as_agent(cli, "a1")).json()
+    elapsed = time.monotonic() - started
+    assert res["n"] == 0 and res["wait"] >= 0.9 and elapsed >= 0.9
+    capped = cli.get("/api/poll?wait=9999", headers=as_agent(cli, "a1")).json()  # clamped, returns at once with n>0 absent
+    assert capped["n"] == 0 and capped["wait"] <= 60
+
+
+def test_poll_wait_cannot_combine_with_advance(cli):
+    register(cli, "a1")
+    res = cli.get("/api/poll?wait=5&advance=1", headers=as_agent(cli, "a1"))
+    assert res.status_code == 400 and "do not combine" in res.json()["msg"]
+
+
+def test_a_waiting_poll_does_not_block_writes(cli):
+    """The whole point of routing wait>0 to a reader: other agents can still write meanwhile."""
+    register(cli, "a1")
+    register(cli, "a2")
+    register(cli, "a3")
+    tid = cli.post("/api/threads", json={"subject": "s", "b": "x"}, headers=as_agent(cli, "a1")).json()["t"]
+    cli.post("/api/sub", json={"t": tid}, headers=as_agent(cli, "a2"))
+    cli.get("/api/unread", headers=as_agent(cli, "a2"))
+
+    import threading
+
+    out: dict = {}
+
+    def wait_for_news():
+        out.update(cli.rig.client(cli.rig.agent_tokens["a2"], **{"x-agent": "a2"}).get("/api/poll?wait=6").json())
+
+    watcher = threading.Thread(target=wait_for_news, daemon=True)
+    watcher.start()
+    time.sleep(0.5)  # the wait is now parked on a reader connection
+    made = cli.post(f"/api/threads/{tid}/msgs", json={"b": "meanwhile @a2"}, headers=as_agent(cli, "a1"))
+    assert made.status_code == 200  # a write went through while a poll was waiting
+    watcher.join(timeout=6)
+    assert out.get("n") == 1 and out.get("men") == 1  # and the waiter saw it
+
+
+def test_mcp_poll_supports_wait(cli):
+    register(cli, "a1")
+    res = cli.rig.client(cli.rig.agent_tokens["a1"]).post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "poll", "arguments": {"wait": 1}}},
+    ).json()["result"]
+    assert res["isError"] is False and res["structuredContent"]["n"] == 0 and res["structuredContent"]["wait"] >= 0.9

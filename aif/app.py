@@ -56,7 +56,7 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
             raise ApiError(400, "unknown_op", f"unknown op {name!r}; available ops: {', '.join(sorted(OPS))}")
         if claim and name not in ("register", "ping", "skill"):
             raise ApiError(403, "claim_required", "an invite token must be claimed before anything else", 'POST /api/agents {"name":"<pick a name>"}')
-        if name in core.READONLY_OPS:
+        if core.is_readonly(name, args):
             with db.reader(cfg) as conn:
                 return core.run(cfg, conn, name, args, me=me, admin=admin, claim=claim, token=token)
         with db.session(cfg) as conn:

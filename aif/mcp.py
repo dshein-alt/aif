@@ -13,7 +13,7 @@ from typing import Any
 
 from . import __version__, db
 from .config import Config
-from .core import OPS, READONLY_OPS, ApiError, run
+from .core import OPS, ApiError, is_readonly, run
 from .render import compact
 from .skill import CARD
 
@@ -87,7 +87,7 @@ def _op_result(cfg: Config, name: str, args: dict[str, Any], me: str | None, adm
     try:
         if claim and name not in ("register", "ping", "skill"):
             raise ApiError(403, "claim_required", "an invite token must be claimed before anything else", 'call the register tool with {"name":"<pick a name>"}')
-        if name in READONLY_OPS:  # read-only ops run on a read-only connection
+        if is_readonly(name, args):  # read-only calls run on a read connection (poll?wait>0 too)
             with db.reader(cfg) as conn:
                 payload = run(cfg, conn, name, args, me=agent, admin=admin, claim=claim, token=token)
         else:

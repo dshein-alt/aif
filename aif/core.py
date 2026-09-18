@@ -45,6 +45,23 @@ _last_purge = 0.0
 READONLY_OPS = frozenset({"ping", "who", "threads", "get", "search", "dl", "skill"})
 
 
+def is_readonly(name: str, args: dict[str, Any] | None) -> bool:
+    """May this call run on a read connection (no write lock)?
+
+    ``poll?wait=N`` is the special case: while it waits it must NOT hold BEGIN IMMEDIATE, so the
+    transports route it to a reader exactly like the readonly ops. Every other op keeps its
+    registry routing.
+    """
+    if name in READONLY_OPS:
+        return True
+    if name == "poll" and args:
+        try:
+            return float(args.get("wait") or 0) > 0
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
 class ApiError(Exception):
     """An error the client can act on: ``code`` is machine readable, ``hint`` imperative."""
 
@@ -1043,22 +1060,61 @@ INBOX_FROM = """
 @op(
     "poll",
     "cheap 'is there anything for me?' check: how many messages, which threads, no bodies, no cursor movement",
-    {"advance": "1 = also clear them (moves the same cursors unread does); default 0 = just look", "mine": "1 = count my own posts too", "threads": "0 = skip the per-thread breakdown", "top": "how many threads to break down (default 20)"},
+    {
+        "advance": "1 = also clear them (moves the same cursors unread does); default 0 = just look",
+        "mine": "1 = count my own posts too",
+        "threads": "0 = skip the per-thread breakdown",
+        "top": "how many threads to break down (default 20)",
+        "wait": "long-poll: seconds to keep waiting for n>0 (0 = answer at once; capped at 60 or AIF_AGENT_TTL-10; cannot combine with advance; standalone use - inside batch it holds the write session)",
+    },
     aliases={"clear": "advance", "su": "threads"},
     bools=("advance", "mine", "threads"),
     ints=("top",),
     write=True,
 )
-def op_poll(cfg: Config, conn: sqlite3.Connection, me: str, advance: bool = False, mine: bool = False, threads: bool = True, top: int = 20, **_: Any) -> dict[str, Any]:
-    """Counts only - the cheapest way for an agent to decide whether to call ``unread``."""
+def op_poll(cfg: Config, conn: sqlite3.Connection, me: str, advance: bool = False, mine: bool = False, threads: bool = True, top: int = 20, wait: Any = 0, **_: Any) -> dict[str, Any]:
+    """Counts only - the cheapest way for an agent to decide whether to call ``unread``.
+
+    With ``wait`` the transports run this on a read connection (see :func:`is_readonly`), and the
+    loop itself opens a fresh reader per iteration so each check sees new messages and nothing
+    holds a lock while sleeping.
+    """
+    try:
+        wait_s = float(wait or 0)
+    except (TypeError, ValueError):
+        raise bad("wait must be seconds (a number)", 'poll {"wait":30}') from None
+    if wait_s < 0:
+        raise bad("wait must be >= 0", 'poll {"wait":30}')
+    if wait_s and advance:
+        raise bad("wait and advance do not combine: wait watches, advance clears", "wait=1 for one, advance=1 for the other")
+    cap = max(5.0, min(60.0, cfg.agent_ttl - 10))
+    wait_s = min(wait_s, cap)
     cursor = conn.execute("SELECT cursor FROM agents WHERE name = ?", [me]).fetchone()["cursor"]
     params = [me, cursor, 1 if mine else 0, me, me, me]
+
+    started = time.monotonic()
+    deadline = started + wait_s
     n = conn.execute("SELECT COUNT(*) c" + INBOX_FROM, params).fetchone()["c"]
-    men = conn.execute("SELECT COUNT(*) c" + INBOX_FROM + " AND EXISTS (SELECT 1 FROM mentions mn2 WHERE mn2.mid = m.id AND mn2.agent = ?)", [*params, me]).fetchone()["c"]
-    out: dict[str, Any] = {"n": n, "men": men, "seq": max_seq(conn), "cursor": cursor}
-    breakdown = {r["thread"]: r for r in conn.execute(
-        "SELECT m.thread thread, COUNT(*) c, MAX(m.id) mx" + INBOX_FROM + " GROUP BY m.thread ORDER BY c DESC LIMIT ?", [*params, max(1, min(top, 200))]
-    )}
+    while n == 0 and time.monotonic() < deadline:
+        time.sleep(0.5)
+        with db.reader(cfg) as fresh:  # a fresh snapshot each iteration; no lock ever held
+            n = fresh.execute("SELECT COUNT(*) c" + INBOX_FROM, params).fetchone()["c"]
+
+    out: dict[str, Any] = {"n": n, "cursor": cursor}
+    if wait_s:
+        out["wait"] = round(min(time.monotonic() - started, wait_s), 2)
+        with db.reader(cfg) as fresh:  # everything after a wait comes from one fresh snapshot
+            out["men"] = fresh.execute("SELECT COUNT(*) c" + INBOX_FROM + " AND EXISTS (SELECT 1 FROM mentions mn2 WHERE mn2.mid = m.id AND mn2.agent = ?)", [*params, me]).fetchone()["c"]
+            out["seq"] = max_seq(fresh)
+            breakdown = {r["thread"]: r for r in fresh.execute(
+                "SELECT m.thread thread, COUNT(*) c, MAX(m.id) mx" + INBOX_FROM + " GROUP BY m.thread ORDER BY c DESC LIMIT ?", [*params, max(1, min(top, 200))]
+            )}
+    else:
+        out["men"] = conn.execute("SELECT COUNT(*) c" + INBOX_FROM + " AND EXISTS (SELECT 1 FROM mentions mn2 WHERE mn2.mid = m.id AND mn2.agent = ?)", [*params, me]).fetchone()["c"]
+        out["seq"] = max_seq(conn)
+        breakdown = {r["thread"]: r for r in conn.execute(
+            "SELECT m.thread thread, COUNT(*) c, MAX(m.id) mx" + INBOX_FROM + " GROUP BY m.thread ORDER BY c DESC LIMIT ?", [*params, max(1, min(top, 200))]
+        )}
     if threads:
         out["th"] = [{"i": tid, "un": r["c"]} for tid, r in breakdown.items()]
         if n > sum(r["c"] for r in breakdown.values()):

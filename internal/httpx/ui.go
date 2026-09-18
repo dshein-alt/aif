@@ -63,15 +63,21 @@ a{color:#2b5fbf;text-decoration:none}a:hover{text-decoration:underline}
 table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #e3e5ea;vertical-align:top}
 th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:#6b7280}
 td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-.msg{border-left:3px solid #d8dae0;padding:.5rem .75rem;margin:.6rem 0;background:#fff}
-.pin{border-left-color:#8a3ffc}
-.msg .who{font-weight:600}.msg .when{color:#6b7280;font-size:.8rem;margin-left:.5rem;font-weight:400}
-.msg .via{color:#8a3ffc;font-size:.8rem;margin-left:.5rem;font-weight:400}
-.av{border-radius:4px;vertical-align:middle;background:#2226}
-.msg .no{color:#9aa0aa;font-size:.8rem;margin-left:.5rem;font-weight:400;font-variant-numeric:tabular-nums;text-decoration:none}
+.msg{display:flex;border:1px solid #d8dae0;border-radius:.5rem;margin:.6rem 0;background:#fff;overflow:hidden;scroll-margin-top:.5rem}
+.msg .who-card{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:.45rem;text-align:center;padding:.55rem .5rem;flex:0 0 7.5rem;width:7.5rem;border-right:1px solid #e6e8ec}
+.msg .who-card .av{width:64px;height:64px;max-width:100%;border-radius:10px;border:1px solid #d8dae0}
+.msg .who-name{font-weight:600;font-size:.82rem;line-height:1.15;overflow-wrap:anywhere}
+.msg .karma{color:#12805c;font-size:.78rem;font-weight:600;font-variant-numeric:tabular-nums}
+.msg .post-main{flex:1;min-width:0;padding:.55rem .8rem}
+.msg .meta{margin:0 0 .3rem;font-size:.82rem;color:#6b7280}
+.msg .no{color:#9aa0aa;font-weight:400;font-variant-numeric:tabular-nums;text-decoration:none}
 .msg .no .id{color:#b6bbc3;font-size:.75rem}
-.msg{scroll-margin-top:.5rem}
-.msg:target{border-left-color:#8a3ffc;background:#f4ecff}
+.msg .when{color:#6b7280;font-weight:400}
+.msg .via{color:#8a3ffc;font-weight:400;margin-left:.5rem}
+.av{border-radius:4px;vertical-align:middle;background:#2226}
+.pin{background:#fbf9ff}
+.pin .who-card{background:#f4ecff;border-right-color:#e6d9ff}
+.msg:target{border-color:#8a3ffc;background:#f4ecff}
 .body{word-wrap:break-word;margin-top:.3rem}
 .body pre{background:#eef0f4;padding:.5rem .75rem;border-radius:.3rem;overflow-x:auto}
 .body code{background:#eef0f4;padding:0 .2rem;border-radius:.2rem}
@@ -86,7 +92,7 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .files{margin-top:.35rem;font-size:.85rem}
 .pager{display:flex;gap:1rem;flex-wrap:wrap;align-items:baseline;margin-top:1rem}
 .pager .cur{font-weight:700;color:#16181d}
-@media (prefers-color-scheme:dark){.pager .cur{color:#e6e8ec}.msg:target{background:#2a2440}}
+@media (prefers-color-scheme:dark){.pager .cur{color:#e6e8ec}.msg:target{background:#2a2440;border-color:#8a3ffc}}
 .card{border:1px solid #d8dae0;border-radius:.5rem;padding:.75rem 1rem;margin:1rem 0;background:#fff}
 input[type=password]{padding:.4rem;width:18rem}
 .on{color:#12805c}.off{color:#9aa0aa}
@@ -100,7 +106,7 @@ button.link:hover{text-decoration:underline}
 .badge{font-size:.72rem;padding:0 .35rem;border-radius:.3rem;text-transform:uppercase;letter-spacing:.03em}
 .b-live{background:#12805c;color:#fff}.b-used{background:#6b7280;color:#fff}
 .b-dead{background:#9aa0aa;color:#fff}.b-unclaimed{background:#b45309;color:#fff}
-@media (prefers-color-scheme:dark){body{background:#15171c;color:#e6e8ec}.msg,.card{background:#1c1f26}th,td,nav{border-color:#2b2f38}code{background:#22262f}
+@media (prefers-color-scheme:dark){body{background:#15171c;color:#e6e8ec}.msg,.card{background:#1c1f26}.msg{border-color:#2b2f38}.msg .who-card{border-right-color:#2b2f38}.msg .who-card .av{border-color:#3a3f4a}.pin{background:#201d2b}.pin .who-card{background:#2a2440;border-right-color:#3a2f52}th,td,nav{border-color:#2b2f38}code{background:#22262f}
 .body pre,.body code{background:#22262f}.body pre code{background:none}.body blockquote{color:#9aa0aa;border-left-color:#2b2f38}}
 `
 
@@ -712,9 +718,12 @@ func (a *App) post(m map[string]any, badge, when, css string) string {
 	if len(files) > 0 {
 		fileHTML = `<div class=files>files:` + strings.Join(files, "") + `</div>`
 	}
-	who := fmt.Sprintf(`<img class=av src="/ui/avatar/%s" width=22 height=22 alt="" loading=lazy> %s`, esc(str(m, "a")), esc(str(m, "a")))
-	return fmt.Sprintf(`<div class=%q id="m-%d"><span class=who>%s</span>%s%s<span class=when title=%q>%s</span>%s<div class=body>%s</div>%s</div>`,
-		css, asInt(m["i"]), who, badge, via, stamp(m["u"]), when, at, bodyHTML(str(m, "b")), fileHTML)
+	name := str(m, "a")
+	karma := "" // placeholder for the karma counter (docs/ROADMAP.md §3); empty until voting lands
+	whoCard := fmt.Sprintf(`<div class=who-card><img class=av src="/ui/avatar/%s" width=64 height=64 alt=%q loading=lazy><span class=who-name>%s</span>%s</div>`, esc(name), name, esc(name), karma)
+	meta := fmt.Sprintf(`<div class=meta>%s <span class=when title=%q>%s</span>%s%s</div>`, badge, stamp(m["u"]), when, via, at)
+	return fmt.Sprintf(`<div class=%q id="m-%d">%s<div class=post-main>%s<div class=body>%s</div>%s</div></div>`,
+		css, asInt(m["i"]), whoCard, meta, bodyHTML(str(m, "b")), fileHTML)
 }
 
 // --- /ui/agents -------------------------------------------------------------

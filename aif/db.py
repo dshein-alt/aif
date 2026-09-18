@@ -139,7 +139,9 @@ def check_salt(cfg: Config, conn: sqlite3.Connection) -> None:
     if known is None:
         set_meta(conn, "salt.sha", digest)
         conn.commit()
-    elif known != digest:
+    elif known != digest and conn.execute("SELECT 1 FROM tokens LIMIT 1").fetchone():
+        # only warn when there is something to invalidate: a warning that can be spurious teaches
+        # operators to ignore warnings (edge case noted by Tessera)
         print(
             "aif: WARNING: AIF_TOKEN_SALT differs from the salt the issued tokens were derived under - "
             "every agent token minted so far is INVALID from now on. Restore the previous salt, or re-issue every token.",

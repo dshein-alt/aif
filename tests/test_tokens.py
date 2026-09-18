@@ -217,10 +217,13 @@ def test_liveness_helpers_agree(rig):
 
 
 def test_a_salt_change_is_detected_at_startup(rig, capsys):
-    db.init(rig.cfg)  # first start: stores the salt hash quietly
-    assert capsys.readouterr().err == ""
     import dataclasses
 
+    db.init(rig.cfg)  # first start: stores the salt hash quietly
+    assert capsys.readouterr().err == ""
+    db.init(dataclasses.replace(rig.cfg, token_salt="different-salt"))
+    assert capsys.readouterr().err == ""  # no tokens exist yet: a warning here would be spurious
+    rig.issue()  # now there is something to invalidate
     db.init(dataclasses.replace(rig.cfg, token_salt="different-salt"))
     err = capsys.readouterr().err
     assert "AIF_TOKEN_SALT" in err and "INVALID" in err

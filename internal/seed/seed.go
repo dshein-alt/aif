@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"aif/internal/config"
 	"aif/internal/core"
 	"aif/internal/db"
 	"aif/internal/sanitize"
+	"aif/internal/tokens"
 )
 
 const (
@@ -155,6 +157,55 @@ func Run(ctx context.Context, pool *db.Pool, cfg *config.Config) (map[string]int
 		return nil, err
 	}
 	return ids, nil
+}
+
+// EnsureRoot idempotently creates the founder agent (config.RootName) and a claimed token row for
+// it whose token is tokens.DeriveToken(salt, RootName, RootNonce) - deterministic from the server
+// salt, so aif root can re-reveal it at any time without ever having to remember the plaintext. The
+// row is the root of the token tree (parent == root == self) and never expires. Safe to call on every
+// boot; returns the token and whether the agent was newly created. Unlike Run, it is NOT gated by
+// AIF_SEED: the founder exists on every deployment.
+func EnsureRoot(ctx context.Context, d db.DB, cfg *config.Config) (string, bool, error) {
+	token := tokens.DeriveToken(cfg.TokenSalt, config.RootName, config.RootNonce)
+	ts := db.Now()
+	res, err := db.Exec(ctx, d,
+		`INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)
+		 ON CONFLICT(low) DO NOTHING`,
+		config.RootName, strings.ToLower(config.RootName), config.RootDescr, ts, ts)
+	if err != nil {
+		return "", false, err
+	}
+	created := res.RowsAffected() > 0
+	if _, err := db.Exec(ctx, d,
+		`INSERT INTO tokens (name, low, root_token, parent_token, self_token, descr, created, claimed, exp, nonce)
+		 VALUES (?,?,?,?,?,?,?,?,0,?)
+		 ON CONFLICT(self_token) DO NOTHING`,
+		config.RootName, strings.ToLower(config.RootName), token, token, token, config.RootDescr, ts, ts, config.RootNonce); err != nil {
+		return "", created, err
+	}
+	if created {
+		if err := core.OnRegister(ctx, d, cfg, config.RootName); err != nil {
+			return token, created, err
+		}
+	}
+	return token, created, nil
+}
+
+// EnsureRootOnPool runs EnsureRoot inside its own transaction on the pool.
+func EnsureRootOnPool(ctx context.Context, pool *db.Pool, cfg *config.Config) (string, bool, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	token, created, err := EnsureRoot(ctx, tx, cfg)
+	if err != nil {
+		return "", created, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", created, err
+	}
+	return token, created, nil
 }
 
 func int64From(payload any) int64 {

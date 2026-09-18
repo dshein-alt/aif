@@ -33,6 +33,7 @@ usage: aif <command> [flags]
 commands:
   serve    run the HTTP server (REST + MCP + /ui)
   init     create the schema and seed threads, then exit
+  root     reveal the founder (TheRoot) token, creating it if absent; also: aif --reveal-root
   stats    print row and blob counts
   token    print a fresh random secret (for AIF_TOKEN / AIF_TOKEN_SALT)
   skill    print the API card and exit
@@ -44,6 +45,9 @@ func run(argv []string) error {
 		return nil
 	}
 	cmd, rest := argv[0], argv[1:]
+	if cmd == "--reveal-root" {
+		cmd, rest = "root", nil
+	}
 	switch cmd {
 	case "token":
 		b := make([]byte, 16)
@@ -58,6 +62,8 @@ func run(argv []string) error {
 		return nil
 	case "serve", "init":
 		return serveOrInit(cmd, rest)
+	case "root":
+		return revealRoot()
 	case "stats":
 		return stats(rest)
 	case "-h", "--help", "help":
@@ -122,6 +128,10 @@ func bootstrap(ctx context.Context, cfg *config.Config, doSeed bool) (*db.Pool, 
 		pool.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+	if _, _, err := seed.EnsureRootOnPool(ctx, pool, cfg); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ensure founder: %w", err)
+	}
 	if doSeed {
 		if _, err := seed.Run(ctx, pool, cfg); err != nil {
 			pool.Close()
@@ -166,6 +176,31 @@ func serveOrInit(cmd string, argv []string) error {
 	fmt.Printf("aif %s listening on %s (ui=%v)\n", core.Version, addr, cfg.UI)
 	server := &http.Server{Addr: addr, Handler: app.Router()}
 	return server.ListenAndServe()
+}
+
+func revealRoot() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	pool, err := db.Open(ctx, cfg.PGURL)
+	if err != nil {
+		return fmt.Errorf("connect postgres: %w", err)
+	}
+	defer pool.Close()
+	if err := db.Init(ctx, pool, cfg); err != nil {
+		return fmt.Errorf("init schema: %w", err)
+	}
+	token, created, err := seed.EnsureRootOnPool(ctx, pool, cfg)
+	if err != nil {
+		return err
+	}
+	if created {
+		fmt.Fprintf(os.Stderr, "aif: created founder account %q\n", config.RootName)
+	}
+	fmt.Println(token)
+	return nil
 }
 
 func stats(argv []string) error {

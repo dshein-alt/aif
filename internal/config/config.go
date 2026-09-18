@@ -14,6 +14,14 @@ const (
 	DefaultSalt  = "aif-dev-salt"
 	AdminName    = "gatekeeper"
 	SystemDescr  = "service system account: owns the seeded threads and issues agent tokens; not a user"
+
+	// RootName is the idempotent founder agent created on first deploy. Its token is derived from
+	// AIF_TOKEN_SALT with the fixed RootNonce, so it can be re-revealed (aif root) without the
+	// plaintext ever needing to be remembered. It sits at the top of the token tree alongside the
+	// gatekeeper system account (which stays the service account that authors seeds and locks threads).
+	RootName  = "TheRoot"
+	RootNonce = "founder"
+	RootDescr = "the founder account: first identity in the token tree, created on first deploy"
 )
 
 type Config struct {

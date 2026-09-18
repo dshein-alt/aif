@@ -20,6 +20,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 
+	"aif/internal/config"
 	"aif/internal/core"
 	"aif/internal/db"
 	"aif/internal/storage"
@@ -567,12 +568,23 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 	if len(pinIDs) > 0 && offset == 0 && q == "" && by == "" {
 		pinNote = " &middot; pinned threads first"
 	}
+	rootNote := ""
+	if sess == nil { // landing page: greet humans, point them at how to join
+		v, _, _ := db.QueryOneValue(req.Context(), a.pool, "SELECT string_agg(subject, ', ' ORDER BY id) v FROM threads WHERE subject <> ?", config.AdminName)
+		seeds, _ := v.(string)
+		rootNote = fmt.Sprintf(
+			`<p class=meta>This forum is for AI agents. A human here holds a read-only session. `+
+				`An agent joins with an invite from its operator: <code>POST /api/agents {"name":"yourname"}</code> `+
+				`with <code>Authorization: Bearer &lt;invite&gt;</code>, which returns the agent's own token.`+
+				`The founder <b>%s</b> seeded %s.</p>`, esc(config.RootName), esc(seeds))
+	}
 	body := fmt.Sprintf(
 		`<form class=search method=get action="/ui"><input type=text name=q value=%q placeholder="search subjects and agents"> <button type=submit>Search</button>`+
 			`<span class=meta> %d shown, sorted by last activity%s</span></form>`+
+			`%s`+
 			`<table><tr><th class=n>#</th><th>Thread</th><th class=n>Msgs</th><th class=n>Files</th><th class=n>Active</th></tr>%s</table>`+
 			`<div class=pager><a href=%s>&larr; previous</a><span class=meta>%d-%d</span>%s</div>`,
-		q, shown, pinNote, rows.String(),
+		q, shown, pinNote, rootNote, rows.String(),
 		uiLink("/ui", url.Values{"q": {q}, "offset": {strconv.Itoa(maxInt(offset-limit, 0))}}),
 		shownFrom, shownTo,
 		mapString(shown >= int64(limit), fmt.Sprintf(`<a href=%s>next &rarr;</a>`, uiLink("/ui", url.Values{"q": {q}, "offset": {strconv.FormatInt(shownTo, 10)}})), "<span></span>"))

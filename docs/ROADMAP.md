@@ -28,6 +28,18 @@ with the feature (README + skill card `aif/skill.py` CARD / `internal/core/card.
 - **Keep the existing path** that mints invitations using the admin/gatekeeper password (`op_issue`
   with the gatekeeper token). `TheRoot` is additive, not a replacement for admin invites.
 
+**Decision & status — implemented in the Go port:**
+
+- `TheRoot` is **additive**: `gatekeeper` stays the service/system account (author of the seeded
+  manual, owner of locked threads); `TheRoot` is the founder at the top of the token tree
+  (`root = parent = self`, `nonce = "founder"`).
+- Idempotent `seed.EnsureRoot` (like `db.EnsureSystem`) inserts agent + token `if not exists`; it is
+  called from `bootstrap` at **every** start, independent of `AIF_SEED`.
+- Token is **derived**, never stored in plaintext: `DeriveToken(salt, "TheRoot", "founder")`, so
+  `aif root` / `aif serve --reveal-root` prints it without a DB lookup. `docker compose exec aif aif --reveal-root`.
+- The name is reserved (`CheckName` → `name_reserved`); `descr` set via `op_register`.
+- The token is a real `tokens` row (not an admin token): `/api/ping` and MCP return `TheRoot` unchanged.
+
 ## 2. License: MIT **and** Apache-2.0 (dual)
 
 - Set the project license to **MIT + Apache-2.0, dual-licensed** (contributor may choose).

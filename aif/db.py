@@ -11,6 +11,9 @@ from typing import Any
 
 from .config import ADMIN_NAME, SYSTEM_DESCR, Config
 
+#: meta marker: the one-off sweep of leftover claim windows has already run on this database.
+CLAIM_WINDOW_SWEEP = "migrated.claim_window"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
   name   TEXT PRIMARY KEY,
@@ -156,14 +159,20 @@ def migrate(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     if "locked" not in cols:  # threads gained the locked flag in 0.2
         conn.execute("ALTER TABLE threads ADD COLUMN locked INTEGER NOT NULL DEFAULT 0")
         conn.commit()
-    if cfg is not None:
+    if cfg is not None and get_meta(conn, CLAIM_WINDOW_SWEEP) is None:
         # 0.2.x bug: claimed invites kept the 24h claim window as a hard expiry. Clear it on rows
         # whose exp still matches exactly created + invite_ttl (a deliberate days=1 lifetime is
         # indistinguishable and accepted as collateral: re-issue if that was you).
+        #
+        # Runs ONCE per database, hence the marker: the match is on a value a *new* named token can
+        # legitimately carry (any days whose seconds equal invite_ttl), so a sweep on every start
+        # would keep erasing deliberate lifetimes long after the legacy rows were fixed - and
+        # re-issuing would not help, since the next restart would erase it again.
         conn.execute(
             "UPDATE tokens SET exp = 0 WHERE claimed IS NOT NULL AND exp != 0 AND ABS(exp - (created + ?)) < 2",
             [cfg.invite_ttl],
         )
+        set_meta(conn, CLAIM_WINDOW_SWEEP, str(now()))
         conn.commit()
 
 

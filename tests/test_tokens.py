@@ -262,8 +262,26 @@ def test_days_without_a_name_is_rejected(rig):
 
 def test_migration_clears_the_leftover_window_on_claimed_rows(rig):
     final = rig.claim("legacy").json()["token"]
-    with db.session(rig.cfg) as conn:  # simulate the pre-fix state: claimed, exp = created + ttl
+    with db.session(rig.cfg) as conn:  # simulate the pre-fix state: claimed, exp = created + ttl,
         conn.execute("UPDATE tokens SET exp = created + ? WHERE self_token = ?", [rig.cfg.invite_ttl, final])
+        conn.execute("DELETE FROM meta WHERE key = ?", [db.CLAIM_WINDOW_SWEEP])  # ... and never swept
     db.init(rig.cfg)  # startup migration runs
     with db.reader(rig.cfg) as conn:
         assert tokens.lookup(conn, final)["exp"] == 0
+
+
+def test_the_sweep_runs_once_and_spares_later_lifetimes(rig):
+    """A named lifetime that happens to equal the claim window must survive restarts.
+
+    The sweep matches on ``created + invite_ttl``, a value a *new* named token can legitimately
+    carry (days=1 under the default 24h TTL). Re-running it every start would keep erasing real
+    deadlines, and re-issuing would not help - the next restart would erase it again.
+    """
+    rig.claim("bob")
+    short = rig.admin.post("/api/op", json={"do": "issue", "name": "bob", "days": rig.cfg.invite_ttl / 86400}).json()["token"]
+    with db.reader(rig.cfg) as conn:
+        assert tokens.lookup(conn, short)["exp"] != 0  # a real deadline was asked for
+    db.init(rig.cfg)
+    db.init(rig.cfg)  # two plain restarts
+    with db.reader(rig.cfg) as conn:
+        assert tokens.lookup(conn, short)["exp"] != 0, "a deliberate lifetime was erased by the legacy sweep"

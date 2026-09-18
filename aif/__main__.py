@@ -23,8 +23,35 @@ SELECT 'pending_uploads', COUNT(*) FROM files WHERE mid IS NULL
 """
 
 
+def load_env_file(path: str) -> dict[str, str]:
+    """Parse a ``.env`` file (KEY=value lines, ``#`` comments, optional ``export`` and quotes)."""
+    out: dict[str, str] = {}
+    try:
+        text = open(path, encoding="utf-8").read()  # noqa: PTH123 - explicit CLI path
+    except OSError as exc:
+        raise ConfigError(f"cannot read env file {path!r}: {exc.strerror or exc}") from None
+    for lineno, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.removeprefix("export ").strip()
+        if "=" not in line:
+            raise ConfigError(f"{path}:{lineno}: expected KEY=value, got {line!r}")
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if not key:
+            raise ConfigError(f"{path}:{lineno}: empty variable name")
+        out[key] = value
+    return out
+
+
 def _config(args: argparse.Namespace) -> Config:
     env: dict[str, str] = dict(os.environ)
+    env_file = getattr(args, "env_file", None) or (".env" if os.path.isfile(".env") else None)
+    if env_file:  # real environment variables win over the file (standard dotenv convention)
+        for key, value in load_env_file(env_file).items():
+            env.setdefault(key, value)
     for attr, key in (("data_dir", "AIF_DATA_DIR"), ("token", "AIF_TOKEN"), ("admin_token", "AIF_ADMIN_TOKEN"), ("max_file_size", "AIF_MAX_FILE_SIZE"), ("db_path", "AIF_DB_PATH"), ("attachments_dir", "AIF_ATTACHMENTS_DIR")):
         value = getattr(args, attr, None)
         if value:
@@ -43,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.add_argument("--db-path", help="SQLite file (defaults to <data-dir>/aif.db)")
         cmd.add_argument("--attachments-dir", help="blob folder (defaults to <data-dir>/attachments)")
         cmd.add_argument("--admin-token", help="gatekeeper token (env AIF_ADMIN_TOKEN); defaults to --token/AIF_TOKEN")
+        cmd.add_argument("--env-file", help="read AIF_* variables from this file (default: ./.env when it exists; real env vars win)")
         return cmd
 
     serve = common(sub.add_parser("serve", help="run the HTTP + MCP service"))
@@ -63,16 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    try:
-        cfg = _config(args)
-        if args.cmd == "serve" and args.max_file_size:
-            cfg.max_file_size = parse_size(args.max_file_size)
-        warnings = cfg.validate()
-    except ConfigError as exc:
-        print(f"aif: {exc}", file=sys.stderr)
-        return 2
-
-    if args.cmd == "token":
+    if args.cmd == "token":  # bootstrap commands: they must work before any config exists
         print(secrets.token_urlsafe(24))
         return 0
 
@@ -81,6 +100,15 @@ def main(argv: list[str] | None = None) -> int:
 
         print(CARD)
         return 0
+
+    try:
+        cfg = _config(args)
+        if args.cmd == "serve" and args.max_file_size:
+            cfg.max_file_size = parse_size(args.max_file_size)
+        warnings = cfg.validate()
+    except ConfigError as exc:
+        print(f"aif: {exc}", file=sys.stderr)
+        return 2
 
     db.init(cfg)
     seeded = seed.run(cfg)

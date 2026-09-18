@@ -215,12 +215,15 @@ def test_ui_search(cli):
 
 def run_cli(*argv, env=None):
     import os
+    import tempfile
 
+    # cwd is an empty directory on purpose: ./.env must never leak the developer's real one into tests
     return subprocess.run(
         [sys.executable, "-m", "aif", *argv],
         capture_output=True,
         text=True,
         env={**os.environ, "AIF_TOKEN": "t0ken", "AIF_TOKEN_SALT": "cli-salt", **(env or {})},
+        cwd=tempfile.mkdtemp(prefix="aif-cli-"),
     )
 
 
@@ -247,7 +250,8 @@ def test_cli_refuses_insecure_default_token(tmp_path):
         [sys.executable, "-m", "aif", "init", "--data-dir", str(tmp_path / "nope")],
         capture_output=True,
         text=True,
-        env={k: v for k, v in os.environ.items() if k not in ("AIF_TOKEN", "AIF_TOKEN_SALT")},
+        env={k: v for k, v in os.environ.items() if k not in ("AIF_TOKEN", "AIF_TOKEN_SALT", "AIF_ALLOW_DEFAULT_TOKEN")},
+        cwd=str(tmp_path),
     )
     assert res.returncode == 2 and "insecure default" in res.stderr
 
@@ -276,3 +280,41 @@ def test_mcp_instructions_are_the_card_plus_notes():
     from aif.skill import CARD
 
     assert INSTRUCTIONS.startswith(CARD)
+
+
+def test_cli_reads_an_env_file(tmp_path):
+    env_file = tmp_path / "custom.env"
+    env_file.write_text("# comment\nAIF_TOKEN=from-file\nexport AIF_TOKEN_SALT=\"file-salt\"\nAIF_DATA_DIR='" + str(tmp_path / "filevar") + "'\n")
+    res = run_cli("init", "--env-file", str(env_file), env={k: v for k, v in __import__("os").environ.items() if not k.startswith("AIF_")})
+    assert res.returncode == 0, res.stderr
+    assert (tmp_path / "filevar" / "aif.db").exists()
+
+
+def test_cli_auto_loads_dot_env_from_the_cwd(tmp_path):
+    (tmp_path / ".env").write_text("AIF_TOKEN=auto\nAIF_TOKEN_SALT=auto-salt\n")
+    res = subprocess.run(
+        [sys.executable, "-m", "aif", "init", "--data-dir", str(tmp_path / "autovar")],
+        capture_output=True,
+        text=True,
+        env={k: v for k, v in __import__("os").environ.items() if not k.startswith("AIF_")},
+        cwd=str(tmp_path),
+    )
+    assert res.returncode == 0, res.stderr
+    assert (tmp_path / "autovar" / "aif.db").exists()
+
+
+def test_real_environment_wins_over_the_env_file(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("AIF_TOKEN=from-file\nAIF_DATA_DIR=" + str(tmp_path / "fromfile") + "\n")
+    res = run_cli("init", "--data-dir", str(tmp_path / "fromenv"), "--env-file", str(env_file))
+    assert res.returncode == 0, res.stderr
+    assert (tmp_path / "fromenv" / "aif.db").exists() and not (tmp_path / "fromfile").exists()  # flag beats file beats nothing
+
+
+def test_a_broken_env_file_is_a_clear_error(tmp_path):
+    bad = tmp_path / "bad.env"
+    bad.write_text("NOT_A_LINE\n")
+    res = run_cli("init", "--data-dir", str(tmp_path / "x"), "--env-file", str(bad))
+    assert res.returncode == 2 and "expected KEY=value" in res.stderr
+    missing = run_cli("init", "--data-dir", str(tmp_path / "y"), "--env-file", str(tmp_path / "nope.env"))
+    assert missing.returncode == 2 and "cannot read env file" in missing.stderr

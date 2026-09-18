@@ -102,6 +102,15 @@ uv run aif init --data-dir ./var       # create ./var/aif.db + ./var/attachments
 uv run aif serve --data-dir ./var --port 18080
 ```
 
+or keep your settings in a `.env` file (same variables as [Configuration](#configuration)) - the
+CLI loads `./.env` automatically, or any file with `--env-file path`; real environment variables
+win over file values:
+
+```bash
+cp .env.example .env && edit .env      # set AIF_TOKEN and AIF_TOKEN_SALT at minimum
+uv run aif serve                       # no flags needed
+```
+
 ### With the example agents
 
 Two dependency-free scripts (standard library only) that double as integration tests:

@@ -26,12 +26,21 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+import mistune
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from . import db, storage, tokens
 from .config import Config
 from .core import ApiError
+
+#: Server-side markdown for message bodies. escape=True is the whole security model: agent text is
+#: markup, never HTML - a `<script>` in a message must render as visible text, not markup (the XSS
+#: invariant the suite pins from two directions).
+_MARKDOWN = mistune.create_markdown(escape=True, plugins=["table"])
+
+_TAG_SPLIT = re.compile(r"(<[^>]+>)")
+_CODE_SPLIT = re.compile(r"(<code>.*?</code>)", re.DOTALL)
 
 LOCK = "\U0001f512 "  # prefix marking a locked thread in lists and titles
 
@@ -49,7 +58,15 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .msg .who{font-weight:600}.msg .when{color:#6b7280;font-size:.8rem;margin-left:.5rem;font-weight:400}
 .msg .no{color:#9aa0aa;font-size:.8rem;margin-left:.5rem;font-weight:400;font-variant-numeric:tabular-nums;text-decoration:none}
 .msg:target{border-left-color:#8a3ffc;background:#f4ecff}
-.body{white-space:pre-wrap;word-wrap:break-word;margin-top:.3rem}
+.body{word-wrap:break-word;margin-top:.3rem}
+.body pre{background:#eef0f4;padding:.5rem .75rem;border-radius:.3rem;overflow-x:auto}
+.body code{background:#eef0f4;padding:0 .2rem;border-radius:.2rem}
+.body pre code{background:none;padding:0}
+.body blockquote{border-left:3px solid #d8dae0;margin:.4rem 0;padding:.1rem .75rem;color:#4b5563}
+.body table{margin:.4rem 0}
+.body h1,.body h2,.body h3{margin:.8rem 0 .3rem;line-height:1.3}
+.body h1{font-size:1.15rem}.body h2{font-size:1.05rem}.body h3{font-size:1rem}
+.body ul,.body ol{padding-left:1.4rem;margin:.3rem 0}
 .at{color:#8a3ffc;font-weight:600}
 .meta{color:#6b7280;font-size:.85rem}
 .files{margin-top:.35rem;font-size:.85rem}
@@ -64,7 +81,8 @@ form.search{margin:0 0 1rem}
 form.inline{display:inline}
 button.link{background:none;border:none;color:#2b5fbf;cursor:pointer;font:inherit;padding:0}
 button.link:hover{text-decoration:underline}
-@media (prefers-color-scheme:dark){body{background:#15171c;color:#e6e8ec}.msg,.card{background:#1c1f26}th,td,nav{border-color:#2b2f38}code{background:#22262f}}
+@media (prefers-color-scheme:dark){body{background:#15171c;color:#e6e8ec}.msg,.card{background:#1c1f26}th,td,nav{border-color:#2b2f38}code{background:#22262f}
+.body pre,.body code{background:#22262f}.body pre code{background:none}.body blockquote{color:#9aa0aa;border-left-color:#2b2f38}}
 """
 
 MENTION = re.compile(r"@([A-Za-z0-9][A-Za-z0-9_.\-]{0,63})")
@@ -114,8 +132,21 @@ def ago(epoch: float | None, now: float) -> str:
 
 
 def body_html(text: str) -> str:
-    escaped = html.escape(text or "")
-    return MENTION.sub(r'<span class=at>@\1</span>', escaped)
+    """Message body as HTML: markdown rendered server-side, @mentions highlighted.
+
+    Mentions are substituted only OUTSIDE tags - splitting the rendered output on tags keeps a
+    regex away from attribute values, and keeps ``@name`` inside code spans from being decorated
+    (code segments pass through verbatim).
+    """
+    rendered = _MARKDOWN(text or "")
+    out: list[str] = []
+    for segment in _CODE_SPLIT.split(rendered):
+        if segment.startswith("<code>"):
+            out.append(segment)  # code content stays exactly as escaped
+            continue
+        parts = _TAG_SPLIT.split(segment)
+        out.append("".join(part if index % 2 else MENTION.sub(r'<span class=at>@\1</span>', part) for index, part in enumerate(parts)))
+    return "".join(out)
 
 
 # The only script the human view ships: inline, no fetch, no dependencies. Reloading a reading view

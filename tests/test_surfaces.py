@@ -188,7 +188,7 @@ def test_ui_paging(cli):
     for i in range(2, 31):
         cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"})
     page = cli.get(f"/ui/thread/{tid}?token={TOKEN}").text
-    assert "class=body>m20<" in page and "class=body>m21<" not in page and "class=body>m1<" in page
+    assert "<p>m20</p>" in page and "<p>m21</p>" not in page and "<p>m1</p>" in page
     older = cli.get(f"/ui/thread/{tid}?token={TOKEN}&before=5").text
     assert "m4" in older and "m5" not in older
     assert "page 1 of 2" in page  # numbered navigation, not just older/newer
@@ -200,29 +200,29 @@ def test_ui_thread_pages_are_numbered_and_navigable(cli):
         cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"})
 
     first = cli.get(f"/ui/thread/{tid}?token={TOKEN}&limit=10").text  # accept-once cookies us
-    assert "class=body>m10<" in first and "class=body>m11<" not in first
-    assert first.count("class=body>m1<") == 1  # the description shows once, not twice
+    assert "<p>m10</p>" in first and "<p>m11</p>" not in first
+    assert first.count("<p>m1</p>") == 1  # the description shows once, not twice
     assert "<span class=no>#1</span>" in first  # ... and says which post it is
     assert "page 1 of 3" in first and first.count("class=pager") == 2  # above *and* below the list
     assert 'id=post-2' in first and 'id=post-10' in first and 'id=post-11' not in first
     assert "page=1" not in first  # page 1 is the default: its links stay clean
 
     second = cli.get(f"/ui/thread/{tid}?page=2&limit=10").text
-    assert "class=body>m11<" in second and "class=body>m20<" in second and "class=body>m21<" not in second
+    assert "<p>m11</p>" in second and "<p>m20</p>" in second and "<p>m21</p>" not in second
     assert "page 2 of 3" in second and 'id=post-11' in second and 'href="#post-11"' in second
     assert "prev" in second and "page=3" in second and "first" not in second  # page 1 is one click back
     assert f'href="/ui/thread/{tid}?limit=10"' in second  # back to page 1 without a page= in the URL
 
     last = cli.get(f"/ui/thread/{tid}?page=3&limit=10").text
-    assert "class=body>m21<" in last and "class=body>m30<" in last
+    assert "<p>m21</p>" in last and "<p>m30</p>" in last
     assert "page 3 of 3" in last and "next" not in last and "first" in last and 'id=post-30' in last
 
     stale = cli.get(f"/ui/thread/{tid}?page=99&limit=10").text  # a page that deletions left behind
-    assert "page 3 of 3" in stale and "class=body>m30<" in stale
+    assert "page 3 of 3" in stale and "<p>m30</p>" in stale
 
     whole = cli.get(f"/ui/thread/{tid}?limit=500").text
     assert "class=pager" not in whole and "page 1 of 1" not in whole  # one page needs no bar
-    assert "class=body>m1<" in whole and "class=body>m30<" in whole  # oldest first, newest last
+    assert "<p>m1</p>" in whole and "<p>m30</p>" in whole  # oldest first, newest last
 
 
 def test_ui_cursor_links_still_number_posts(cli):
@@ -231,7 +231,7 @@ def test_ui_cursor_links_still_number_posts(cli):
         cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"})
     cli.get(f"/ui?token={TOKEN}")  # accept-once: the cookie carries the session from here on
     older = cli.get(f"/ui/thread/{tid}?before=15&limit=5").text
-    assert "class=body>m10<" in older and "class=body>m14<" in older and "class=body>m15<" not in older
+    assert "<p>m10</p>" in older and "<p>m14</p>" in older and "<p>m15</p>" not in older
     assert 'id=post-10' in older and 'id=post-14' in older  # numbered by position, cursor or not
     assert "earlier" in older and "page " not in older  # the old two-link pager, no page bar
 
@@ -395,3 +395,47 @@ def test_a_broken_env_file_is_a_clear_error(tmp_path):
     assert res.returncode == 2 and "expected KEY=value" in res.stderr
     missing = run_cli("init", "--data-dir", str(tmp_path / "y"), "--env-file", str(tmp_path / "nope.env"))
     assert missing.returncode == 2 and "cannot read env file" in missing.stderr
+
+
+# ----------------------------------------------------------------------- markdown in /ui
+
+
+def test_ui_renders_message_bodies_as_markdown(cli):
+    cli.post("/api/agents", json={"name": "alice"})
+    made = cli.post(
+        "/api/threads",
+        json={"subject": "fmt", "b": "**bold** and `code`\n\n- one\n- two\n\n> a quote\n\n@bob look"},
+        headers={"x-agent": "alice"},
+    ).json()
+    cli.get(f"/ui?token={TOKEN}")  # accept-once: cookie for the rest
+    page = cli.get(f"/ui/thread/{made['t']}").text
+    assert "<strong>bold</strong>" in page and "<code>code</code>" in page
+    assert "<li>one</li>" in page and "<blockquote>" in page
+    assert '<span class=at>@bob</span>' in page  # mentions still highlighted after rendering
+    assert cli.get(f"/api/messages/{made['i']}").json()["b"].startswith("**bold**")  # the API keeps raw text
+
+
+def test_markdown_never_turns_agent_text_into_markup(cli):
+    cli.post("/api/agents", json={"name": "evil"})
+    made = cli.post(
+        "/api/threads",
+        json={"subject": "xss", "b": "<script>alert(1)</script> and <img src=x onerror=alert(1)>", "at": []},
+        headers={"x-agent": "evil"},
+    ).json()
+    cli.post(f"/api/threads/{made['t']}/msgs", json={"b": "and a parsed link: [click](javascript:alert(1))"}, headers={"x-agent": "evil"})
+    cli.get(f"/ui?token={TOKEN}")
+    page = cli.get(f"/ui/thread/{made['t']}").text
+    assert "<script>alert" not in page and "<img" not in page  # no live tags at all
+    assert "&lt;script&gt;" in page and "&lt;img" in page  # both visible as escaped text
+    assert 'href="javascript:' not in page and "#harmful-link" in page  # parsed dangerous links are neutralised
+
+
+def test_mentions_inside_code_spans_are_not_decorated(cli):
+    cli.post("/api/agents", json={"name": "alice"})
+    made = cli.post("/api/threads", json={"subject": "m", "b": "no mentions in the opener"}, headers={"x-agent": "alice"}).json()
+    cli.post(f"/api/threads/{made['t']}/msgs", json={"b": "ping `@bob` in code, and @bob for real"}, headers={"x-agent": "alice"})
+    cli.get(f"/ui?token={TOKEN}")
+    page = cli.get(f"/ui/thread/{made['t']}").text
+    assert "<code>@bob</code>" in page  # left alone inside code
+    assert "and <span class=at>@bob</span> for real" in page  # decorated in prose
+    assert page.count('<span class=at>@bob</span>') == 2  # the prose one + the header mention chip

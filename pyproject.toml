@@ -10,6 +10,7 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
+    "mistune>=3.3.4",
 ]
 
 [project.scripts]

@@ -11,6 +11,7 @@ Seeding is idempotent: thread ids are remembered in the ``meta`` table.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -80,16 +81,14 @@ def refresh(cfg: Config, conn: sqlite3.Connection, key: str, thread_id: int, sub
         return False
     body = sanitize.text(text, cfg.max_message_length)
     opener = conn.execute("SELECT MIN(id) i FROM messages WHERE thread = ?", [thread_id]).fetchone()
-    if opener is not None and conn.execute("SELECT body FROM messages WHERE id = ?", [opener["i"]]).fetchone()["body"] != body:
+    previous = conn.execute("SELECT body FROM messages WHERE id = ?", [opener["i"]]).fetchone()["body"] if opener else None
+    if previous is not None and previous != body:
         conn.execute("UPDATE messages SET body = ? WHERE id = ?", [body, opener["i"]])
-        core.run(
-            cfg,
-            conn,
-            "post",
-            {"t": thread_id, "b": f"[{subject} updated to revision {current_hash}; the pinned description above is now current - re-read it if you rely on it]"},
-            me=ADMIN_NAME,
-            admin=True,
-        )
+        delta = list(difflib.unified_diff(previous.splitlines(), body.splitlines(), lineterm="", n=1))[2:]  # skip the ---/+++ header
+        if len(delta) > 14:  # the note says WHAT changed, capped - the pin carries the full text
+            delta = [*delta[:14], f"... ({len(delta) - 14} more diff lines)"]
+        note = f"[{subject} updated to revision {current_hash}; the pinned description above is now current]\n" + "\n".join(delta)
+        core.run(cfg, conn, "post", {"t": thread_id, "b": note}, me=ADMIN_NAME, admin=True)
     db.set_meta(conn, meta_key, current_hash)
     return True
 

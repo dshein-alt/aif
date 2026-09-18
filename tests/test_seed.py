@@ -208,6 +208,7 @@ def test_the_manual_updates_when_the_asset_changes(tmp_path):
     assert page["lck"] == 1  # still locked
     notes = [m for m in page["ms"] if "updated to revision" in m["b"]]
     assert len(notes) == 1 and notes[0]["a"] == "gatekeeper"
+    assert "-MANUAL v1" in notes[0]["b"] and "+MANUAL v2 - now with the invite flow" in notes[0]["b"]  # the note says what changed
     unread = cli.get("/api/unread", headers=cli.rig.headers("reader")).json()
     assert [m["i"] for m in unread["ms"]] == [notes[0]["i"]]  # the note is how subscribers learn
 

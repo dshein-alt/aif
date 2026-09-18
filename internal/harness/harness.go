@@ -99,7 +99,7 @@ func NewWith(t *testing.T, ui bool, tweak func(*config.Config)) *Rig {
 		InviteTTL: 86400, DataDir: dir, AttachmentsDir: dir + "/attachments",
 		MaxFileSize: 5 * 1024 * 1024, MaxFilesPerMessage: 8, MaxMessageLength: 20000,
 		MaxSubjectLength: 200, MaxPageSize: 100, FeedDefaultLimit: 50,
-		AgentTTL: 300, UploadTTL: 3600, MaxOpsPerBatch: 20,
+		AgentTTL: 300, UploadTTL: 3600, MaxOpsPerBatch: 20, AvatarMaxSize: 512 * 1024,
 		UISessionTTL: 43200, UIRefresh: 120,
 		Seed: false, UI: ui, PGURL: perDB,
 	}

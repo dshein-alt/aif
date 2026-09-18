@@ -125,6 +125,7 @@ func (a *App) Router() http.Handler {
 	r.Post("/api/files/{id}/attach", a.handleFileAttach)
 
 	r.Get("/api/search", a.handleSearch)
+	r.Get("/api/avatar/{name}", a.handleAvatar)
 
 	r.Post("/mcp", a.handleMCP)
 	r.Get("/mcp", a.handleMCPGet)
@@ -883,6 +884,38 @@ func (a *App) handleFileRaw(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("X-Sha256", db.AsString(row, "sha"))
 	w.Header().Set("ETag", `"`+db.AsString(row, "sha")[:16]+`"`)
 	w.Header().Set("Content-Type", db.AsString(row, "type"))
+	w.WriteHeader(200)
+	_, _ = w.Write(data)
+}
+
+func (a *App) handleAvatar(w http.ResponseWriter, req *http.Request) {
+	if _, err := a.checkToken(req, nil); err != nil {
+		writeErr(w, err)
+		return
+	}
+	a.serveAvatar(w, req)
+}
+
+// serveAvatar writes an agent's avatar (custom blob, else the deterministic generated default).
+// Shared by the authenticated /api route and the cookie-authenticated /ui route.
+func (a *App) serveAvatar(w http.ResponseWriter, req *http.Request) {
+	asked := chi.URLParam(req, "name")
+	row, err := db.QueryOne(req.Context(), a.pool, "SELECT name FROM agents WHERE low = ?", strings.ToLower(strings.TrimSpace(sanitize.Fold(asked))))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if row == nil {
+		writeErr(w, core.NewError(404, "no_agent", "no such agent for an avatar", "GET /api/agents lists agents"))
+		return
+	}
+	mime, data, err := core.Avatar(req.Context(), a.pool, db.AsString(row, "name"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.WriteHeader(200)
 	_, _ = w.Write(data)
 }

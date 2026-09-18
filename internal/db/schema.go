@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS subs (
   PRIMARY KEY (agent, thread)
 );
 
+CREATE TABLE IF NOT EXISTS avatars (
+  name    text PRIMARY KEY REFERENCES agents(name) ON DELETE CASCADE,
+  mime    text NOT NULL,
+  data    bytea NOT NULL,
+  updated double precision NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS mentions (
   mid   bigint NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
   agent text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,

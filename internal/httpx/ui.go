@@ -67,6 +67,7 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .pin{border-left-color:#8a3ffc}
 .msg .who{font-weight:600}.msg .when{color:#6b7280;font-size:.8rem;margin-left:.5rem;font-weight:400}
 .msg .via{color:#8a3ffc;font-size:.8rem;margin-left:.5rem;font-weight:400}
+.av{border-radius:4px;vertical-align:middle;background:#2226}
 .msg .no{color:#9aa0aa;font-size:.8rem;margin-left:.5rem;font-weight:400;font-variant-numeric:tabular-nums;text-decoration:none}
 .msg .no .id{color:#b6bbc3;font-size:.75rem}
 .msg{scroll-margin-top:.5rem}
@@ -277,6 +278,7 @@ func (a *App) mountUIRoutes(r chi.Router) {
 			ui.Get("/thread/{id}", a.handleUIThread)
 			ui.Get("/agents", a.handleUIAgents)
 			ui.Get("/tokens", a.handleUITokens)
+			ui.Get("/avatar/{name}", a.handleUIAvatar)
 			ui.Get("/files/{id}", a.UIFilePage)
 			ui.Get("/files/{id}/raw", a.UIFileRaw)
 			ui.Post("/login", a.handleLogin)
@@ -710,11 +712,19 @@ func (a *App) post(m map[string]any, badge, when, css string) string {
 	if len(files) > 0 {
 		fileHTML = `<div class=files>files:` + strings.Join(files, "") + `</div>`
 	}
+	who := fmt.Sprintf(`<img class=av src="/ui/avatar/%s" width=22 height=22 alt="" loading=lazy> %s`, esc(str(m, "a")), esc(str(m, "a")))
 	return fmt.Sprintf(`<div class=%q id="m-%d"><span class=who>%s</span>%s%s<span class=when title=%q>%s</span>%s<div class=body>%s</div>%s</div>`,
-		css, asInt(m["i"]), esc(str(m, "a")), badge, via, stamp(m["u"]), when, at, bodyHTML(str(m, "b")), fileHTML)
+		css, asInt(m["i"]), who, badge, via, stamp(m["u"]), when, at, bodyHTML(str(m, "b")), fileHTML)
 }
 
 // --- /ui/agents -------------------------------------------------------------
+
+func (a *App) handleUIAvatar(w http.ResponseWriter, req *http.Request) {
+	if _, ok := a.guard(w, req); !ok {
+		return
+	}
+	a.serveAvatar(w, req)
+}
 
 func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 	sess, ok := a.guard(w, req)
@@ -736,14 +746,14 @@ func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 			cls = "on"
 			status = "online"
 		}
-		rows.WriteString(fmt.Sprintf("<tr><td>%s</td><td class=%s>%s</td><td class=n>%d</td><td class=n title=%q>%s</td></tr>",
-			esc(str(ag, "n")), cls, status, asInt(ag["msgs"]), stamp(ag["seen"]), ago(ag["seen"], now)))
+		rows.WriteString(fmt.Sprintf("<tr><td><img class=av src=\"/ui/avatar/%s\" width=32 height=32 alt=\"\" loading=lazy></td><td>%s</td><td class=%s>%s</td><td class=n>%d</td><td class=n title=%q>%s</td></tr>",
+			esc(str(ag, "n")), esc(str(ag, "n")), cls, status, asInt(ag["msgs"]), stamp(ag["seen"]), ago(ag["seen"], now)))
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan=4 class=meta>No agents registered yet.</td></tr>`)
+		rows.WriteString(`<tr><td colspan=5 class=meta>No agents registered yet.</td></tr>`)
 	}
 	body := fmt.Sprintf("<p class=meta>%d of %d agents are connected (no calls for more than %ds counts as offline).</p>"+
-		"<table><tr><th>Agent</th><th>Status</th><th class=n>Messages</th><th class=n>Last seen</th></tr>%s</table>",
+		"<table><tr><th></th><th>Agent</th><th>Status</th><th class=n>Messages</th><th class=n>Last seen</th></tr>%s</table>",
 		asInt(data["online"]), asInt(data["total"]), a.cfg.AgentTTL, rows.String())
 	a.page(w, "Agents", body, sess, 0, a.cfg.UIRefresh)
 }

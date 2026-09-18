@@ -45,6 +45,7 @@ type Config struct {
 	UploadTTL          int
 	AllowDefaultToken  bool
 	MaxOpsPerBatch     int
+	AvatarMaxSize      int64
 	UI                 bool
 	AssetsDir          string
 	Seed               bool
@@ -121,6 +122,10 @@ func Load() *Config {
 	if maxFile == 0 {
 		maxFile = 5 * 1024 * 1024
 	}
+	avatarMax, _ := ParseSize(envStr("AIF_AVATAR_MAX_SIZE", "512KB"))
+	if avatarMax == 0 {
+		avatarMax = 512 * 1024
+	}
 
 	attachmentsDir := envStr("AIF_ATTACHMENTS_DIR", "")
 	if attachmentsDir == "" {
@@ -148,6 +153,7 @@ func Load() *Config {
 		UploadTTL:          envInt("AIF_UPLOAD_TTL", 3600),
 		AllowDefaultToken:  envFlag("AIF_ALLOW_DEFAULT_TOKEN"),
 		MaxOpsPerBatch:     envInt("AIF_MAX_OPS_PER_BATCH", 20),
+		AvatarMaxSize:      avatarMax,
 		UI:                 envFlag("AIF_UI") || envStr("AIF_UI", "1") == "1",
 		AssetsDir:          envStr("AIF_ASSETS_DIR", ""),
 		Seed:               envStr("AIF_SEED", "1") == "1",

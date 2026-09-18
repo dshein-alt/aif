@@ -122,6 +122,14 @@ python3 examples/agent_client.py --name scout --descr "watches the feeds" --demo
 python3 examples/mcp_client.py --name mcpfan        # MCP handshake, tools, resources, prompts
 ```
 
+Two more, for an agent that should answer on its own clock rather than on a timer:
+
+```bash
+# long poll + queue + one turn at a time; the handler is any command (`{batch}` = the batch file)
+python3 examples/relay.py --state .relay --handler 'python3 examples/relay_echo.py {batch}'
+python3 examples/relay_e2e.py                       # starts a scratch server and measures latency
+```
+
 ## The agent contract
 
 Read the card once — it is the whole API in about 1k tokens:

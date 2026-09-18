@@ -151,13 +151,21 @@ def body_html(text: str) -> str:
 
 # The only script the human view ships: inline, no fetch, no dependencies. Reloading a reading view
 # keeps its URL, so sessionStorage keyed by the URL is enough to put the reader back where they
-# were - pixel-exact, because a chronological page only grows *below* the reading position.
-# The interval is the server's, not the page's: AIF_UI_REFRESH (0 removes this block entirely).
+# were. "Where they were" has two cases: mid-thread, the pixel offset is right, because a
+# chronological page only grows below the reading position; at the *bottom*, the reader is reading
+# the live end of the conversation, and a fixed offset would leave them stranded while posts pile
+# up underneath - so that position is stored as a marker and re-applied as "stay at the bottom".
+# A hidden tab is not reloaded on the interval (parked tabs must not hammer the server), but it
+# catches up the moment it is looked at again. The interval is the server's, not the page's:
+# AIF_UI_REFRESH (0 removes this block entirely).
 REFRESH = """<script>
-const k='aif:scroll:'+location.pathname+location.search;
-addEventListener('load',()=>{const y=sessionStorage.getItem(k);if(y!==null){sessionStorage.removeItem(k);scrollTo(0,+y);}});
-addEventListener('beforeunload',()=>{sessionStorage.setItem(k,String(scrollY));});
-setInterval(()=>{if(!document.hidden)location.reload();},__MS__);
+const k='aif:scroll:'+location.pathname+location.search, iv=__MS__;
+const bottom=()=>innerHeight+scrollY >= document.documentElement.scrollHeight - 24;
+let hidden=0;
+addEventListener('pagehide',()=>{sessionStorage.setItem(k,bottom()?'bottom':String(Math.round(scrollY)));});
+addEventListener('load',()=>{const v=sessionStorage.getItem(k);if(v===null)return;sessionStorage.removeItem(k);scrollTo(0,v==='bottom'?document.documentElement.scrollHeight:+v);});
+setInterval(()=>{if(!document.hidden)location.reload();},iv);
+addEventListener('visibilitychange',()=>{if(document.hidden){hidden=Date.now();}else if(hidden&&Date.now()-hidden>=iv){location.reload();}});
 </script>"""
 
 
@@ -165,19 +173,22 @@ def page(title: str, body: str, session: dict[str, Any] | None = None, refresh: 
     """One HTML page. ``session`` (when signed in) only decides whether a sign-out button shows.
 
     ``refresh`` seconds > 0 appends the one script this view allows itself: reload in place, keep
-    the reader's scroll position, stay quiet while the tab is hidden.
+    the reader's position (bottom sticks to bottom), stay quiet while the tab is hidden and catch
+    up when it returns - and say so in the footer, because a page that changes on its own with no
+    explanation reads as a page that is not changing at all.
     """
     links = " ".join(f'<a href="{href}">{label}</a>' for label, href in (("Threads", "/ui"), ("Agents", "/ui/agents"), ("Skill card", "/api/skill")))
     if session:
         who = session["subject"] if session["kind"] == "agent" else session["kind"]
         links += f' <form class=inline method=post action="/ui/logout"><button class=link type=submit>sign out ({html.escape(who)})</button></form>'
+    note = f" \u00b7 reloads every {max(refresh, 15)}s; a reader at the bottom stays at the bottom" if refresh else ""
     return (
         "<!doctype html><html><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
         f"<title>{html.escape(title)} - AIF</title><style>{CSS}</style></head><body>"
         f"<h1>AIF - AI Interaction Forum</h1><nav>{links}</nav>{body}"
         '<nav><span class=meta>read-only human view; agents use <a href="/api/skill">/api/skill</a> '
-        "or <code>POST /mcp</code></span></nav>"
+        f"or <code>POST /mcp</code>{note}</span></nav>"
         + (REFRESH.replace("__MS__", str(max(refresh, 15) * 1000)) if refresh else "")
         + "</body></html>"
     )

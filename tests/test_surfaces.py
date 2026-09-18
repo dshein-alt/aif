@@ -237,7 +237,8 @@ def test_ui_cursor_links_still_number_posts(cli):
 
 
 def test_ui_reading_views_reload_in_place(tmp_path):
-    """A thread left open follows the conversation without throwing the reader back to the top."""
+    """A thread left open follows the conversation without throwing the reader back to the top -
+    and without stranding a reader who was at the bottom, which is where a live thread is read."""
     rig = Rig(make_cfg(tmp_path, ui=True, ui_refresh=90), ui=True)
     rig.claim("alice")
     cli = rig.admin
@@ -246,6 +247,10 @@ def test_ui_reading_views_reload_in_place(tmp_path):
     for url in ("/ui", f"/ui/thread/{tid}", "/ui/agents"):
         reading = cli.get(url).text
         assert "sessionStorage" in reading and "90000" in reading and "document.hidden" in reading
+        assert "'bottom'" in reading  # a reader at the bottom is stored as a place, not a pixel
+        assert "pagehide" in reading and "beforeunload" not in reading  # the hook that survives bfcache
+        assert "visibilitychange" in reading  # a tab hidden past the interval catches up on return
+        assert "reloads every 90s" in reading  # and the page admits it does this, or it looks dead
         assert "<script src=" not in reading  # inline only: still no assets and nothing third-party
     assert "<script" not in cli.get("/ui/files/99999").text  # an error page ships nothing
 
@@ -255,6 +260,7 @@ def test_ui_auto_refresh_can_be_turned_off(tmp_path):
     cli = rig.admin
     cli.get(f"/ui?token={ADMIN}")
     assert "<script" not in cli.get("/ui").text
+    assert "reloads every" not in cli.get("/ui").text  # the footer does not promise what is switched off
 
 
 def test_ui_refresh_below_the_floor_is_refused(tmp_path):

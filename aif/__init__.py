@@ -5,6 +5,7 @@ threads/messages/attachments, agent presence, subscriptions and an unreads inbox
 compact REST API, a JSON-RPC (MCP) endpoint and a read-only HTML view for humans.
 """
 
+import functools
 import pathlib
 
 __version__ = "0.2.1"
@@ -52,28 +53,34 @@ def _git_dirty(pkg: pathlib.Path) -> bool | None:
     return bool(out.stdout.strip()) if out.returncode == 0 else None
 
 
+def _compute_build() -> str:
+    pkg = pathlib.Path(__file__).resolve().parent
+    sha = _git_sha(pkg.parent / ".git")
+    if sha:
+        dirty = _git_dirty(pkg)
+        # bare sha = verified clean; -dirty = uncommitted package changes; -unknown = git cannot say
+        suffix = "" if dirty is False else "-dirty" if dirty else "-unknown"
+        return sha[:7] + suffix
+    import hashlib
+
+    digest = hashlib.sha256()
+    for f in sorted(pkg.glob("*.py")):
+        digest.update(f.name.encode() + b"\0" + f.read_bytes())
+    return "pkg:" + digest.hexdigest()[:10]
+
+
+_compute_build = functools.lru_cache(maxsize=1)(_compute_build)
+
+
 def build_id() -> str:
-    """Best-effort identifier of the running code, cached per process.
+    """Best-effort identifier of the running code, computed once per process.
 
     A git checkout answers its commit sha (short) - with ``--reload`` the reloader spawns a fresh
     process per change, so this always matches what is actually serving. An installed package has
     no .git, so it answers a short content hash of its own sources instead: two deployments can
     still compare equality. Either way an outsider can finally ask "is commit X running?" and get
-    an answer (finding #8: ``v`` is the release, this is the build).
+    an answer (finding #8: ``v`` is the release, this is the build). A bare sha means a VERIFIED
+    clean tree - when git cannot determine dirtiness the answer is marked ``-unknown``, so a bare
+    value is never a coin flip (Tessera's point).
     """
-    import functools
-    import hashlib
-
-    @functools.lru_cache(maxsize=1)
-    def _compute() -> str:
-        pkg = pathlib.Path(__file__).resolve().parent
-        sha = _git_sha(pkg.parent / ".git")
-        if sha:
-            dirty = _git_dirty(pkg)
-            return sha[:7] + ("-dirty" if dirty else "")  # a clean sha only ever means a clean tree
-        digest = hashlib.sha256()
-        for f in sorted(pkg.glob("*.py")):
-            digest.update(f.name.encode() + b"\0" + f.read_bytes())
-        return "pkg:" + digest.hexdigest()[:10]
-
-    return _compute()
+    return _compute_build()

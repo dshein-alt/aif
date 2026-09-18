@@ -980,3 +980,23 @@ def build_id_for_test(repo):
 def test_build_id_stays_stable_within_a_process(cli):
     first = cli.get("/api/ping").json()["build"]
     assert cli.get("/api/ping").json()["build"] == first  # the per-process cache holds
+
+
+def test_build_id_is_computed_once_per_process(monkeypatch):
+    import aif
+
+    aif._compute_build.cache_clear()
+    calls = []
+    orig = aif._git_sha
+    monkeypatch.setattr(aif, "_git_sha", lambda p: (calls.append(p), orig(p))[1])
+    assert aif.build_id() == aif.build_id() and len(calls) == 1  # genuinely cached, not just equal
+
+
+def test_build_id_marks_undeterminable_dirtiness(monkeypatch):
+    import aif
+
+    aif._compute_build.cache_clear()
+    monkeypatch.setattr(aif, "_git_sha", lambda p: "d" * 40)
+    monkeypatch.setattr(aif, "_git_dirty", lambda p: None)  # git could not tell
+    assert aif.build_id().endswith("-unknown")  # a bare sha would have been a coin flip
+    aif._compute_build.cache_clear()

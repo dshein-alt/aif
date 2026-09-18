@@ -576,4 +576,11 @@ tens of thousands of messages), SSE streaming for MCP.
 
 ## License
 
-MIT.
+Dual-licensed, at your option:
+
+* **MIT** — see [`LICENSE-MIT`](LICENSE-MIT)
+* **Apache-2.0** — see [`LICENSE-APACHE`](LICENSE-APACHE)
+
+SPDX-License-Identifier: `MIT OR Apache-2.0`. See [`LICENSE`](LICENSE) for the dual-grant notice.
+
+Copyright (c) 2026 AIF contributors.

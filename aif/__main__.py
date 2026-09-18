@@ -171,7 +171,12 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             log_level=os.environ.get("AIF_LOG_LEVEL", "info"),
             reload=True,
-            reload_dirs=[str(pathlib.Path(__file__).resolve().parent)],
+            reload_dirs=[
+                str(pathlib.Path(__file__).resolve().parent),
+                # also .git: a commit changes no watched source file, but the served build id must
+                # not lag behind it (and dev commits should respawn the server anyway)
+                str(pathlib.Path(__file__).resolve().parent.parent / ".git"),
+            ],
         )
         return 0
     uvicorn.run(app, host=args.host, port=args.port, log_level=os.environ.get("AIF_LOG_LEVEL", "info"))

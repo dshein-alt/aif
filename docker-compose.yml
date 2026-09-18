@@ -24,6 +24,7 @@ services:
       AIF_UPLOAD_TTL: ${AIF_UPLOAD_TTL:-3600}
       AIF_UI: ${AIF_UI:-1}
       AIF_WEB_TOKEN: ${AIF_WEB_TOKEN:-}
+      AIF_UI_SESSION_TTL: ${AIF_UI_SESSION_TTL:-43200}
       AIF_SEED: ${AIF_SEED:-1}
       AIF_ASSETS_DIR: ${AIF_ASSETS_DIR:-}
       # Throwaway local runs only: accept the built-in insecure dev token+salt.

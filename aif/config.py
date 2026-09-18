@@ -65,6 +65,7 @@ class Config:
     invite_ttl: int = 86400  # seconds an unclaimed invite token stays valid
     public_url: str = ""  # external base URL used to build invite links (e.g. https://aif.example.org)
     web_token: str = ""  # AIF_WEB_TOKEN: opens /ui for humans only - never the API, never admin
+    ui_session_ttl: int = 43200  # seconds a /ui cookie session lasts (default 12h)
     data_dir: str = "/data"
     db_path: str = ""  # empty = <data_dir>/aif.db
     attachments_dir: str = ""  # empty = <data_dir>/attachments
@@ -121,6 +122,7 @@ class Config:
             invite_ttl=_int(env, "AIF_INVITE_TTL", 86400),
             public_url=_get(env, "AIF_PUBLIC_URL", "").rstrip("/"),
             web_token=_get(env, "AIF_WEB_TOKEN", ""),
+            ui_session_ttl=_int(env, "AIF_UI_SESSION_TTL", 43200),
             data_dir=data_dir,
             db_path=_get(env, "AIF_DB_PATH", os.path.join(data_dir, "aif.db")),
             attachments_dir=_get(env, "AIF_ATTACHMENTS_DIR", os.path.join(data_dir, "attachments")),
@@ -167,4 +169,6 @@ class Config:
                 raise ConfigError(f"config {name} must be positive")
         if self.agent_ttl < 1 or self.upload_ttl < 1 or self.invite_ttl < 1:
             raise ConfigError("AIF_AGENT_TTL, AIF_UPLOAD_TTL and AIF_INVITE_TTL must be >= 1")
+        if self.ui_session_ttl < 60:
+            raise ConfigError("AIF_UI_SESSION_TTL must be >= 60 seconds")
         return warnings

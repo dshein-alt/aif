@@ -27,21 +27,29 @@ def anon(rig: Rig):
 
 def test_the_web_token_opens_the_ui_but_never_the_api(rig):
     rig.admin.post("/api/threads", json={"subject": "visible", "b": "x"}, headers={"x-agent": "gatekeeper"})
-    assert rig.client(WEB).get("/ui").status_code == 200 and "visible" in rig.client(WEB).get("/ui").text
+    page = rig.client().get(f"/ui?token={WEB}")  # accept-once: validated, cookied, redirected clean
+    assert page.status_code == 200 and "visible" in page.text
     for res in (rig.client(WEB).get("/api/threads"), rig.client(WEB).get("/api/ping"), rig.client(WEB).post("/api/op", json={"do": "ping"})):
         assert res.status_code == 403 and res.json()["err"] == "web_token", res.text
         assert "/ui" in res.json()["hint"]
 
 
 def test_the_gatekeeper_token_still_opens_the_ui(rig):
-    assert rig.admin.get("/ui").status_code == 200
-    assert rig.admin.get("/ui/agents").status_code == 200
+    from conftest import ADMIN as ADMIN_TOKEN
+    assert rig.client().get(f"/ui?token={ADMIN_TOKEN}").status_code == 200
+    assert rig.client().get(f"/ui/agents?token={ADMIN_TOKEN}").status_code == 200
 
 
-def test_an_agent_token_never_opens_the_ui(rig):
+def test_an_agent_token_opens_a_readonly_ui_session(rig):
+    """Agents may browse too - and the session dies with the credential (revocation cascades)."""
     rig.claim("bob")
-    res = rig.client(rig.agent_tokens["bob"]).get("/ui")
-    assert res.status_code == 403
+    browser = rig.client()
+    page = browser.get(f"/ui?token={rig.agent_tokens['bob']}")
+    assert page.status_code == 200
+    assert "sign out (bob)" in browser.get("/ui").text  # a derived session, not the raw token
+    rig.admin.post("/api/op", json={"do": "revoke", "name": "bob"})
+    res = browser.get("/ui")
+    assert res.status_code == 401 and "Sign in" in res.text  # revoked token, dead session
 
 
 def test_web_token_config(tmp_path):

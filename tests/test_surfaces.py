@@ -128,27 +128,28 @@ def test_mcp_instructions_match_the_card():
 # ------------------------------------------------------------------- human web view
 
 
-def test_ui_requires_the_token(tmp_path):
+def test_ui_requires_a_login(tmp_path):
     anon = TestClient(create_app(make_cfg(tmp_path, ui=True), mount_ui=True))
-    assert anon.get("/ui").status_code == 401
-    assert "Access token required" in anon.get("/ui").text
-    assert anon.get("/ui?token=nope").status_code == 403
-    assert anon.get(f"/ui?token={TOKEN}").status_code == 200
-    assert anon.get("/ui", headers={"authorization": f"Bearer {TOKEN}"}).status_code == 200
+    res = anon.get("/ui")
+    assert res.status_code == 401 and "Sign in to read the forum" in res.text
+    assert anon.get("/ui?token=nope").status_code == 403  # accept-once rejects clearly
+    assert anon.get(f"/ui?token={TOKEN}").status_code == 200  # accept-once -> cookie -> content
+    fresh = TestClient(create_app(make_cfg(tmp_path, ui=True), mount_ui=True))
+    assert fresh.get("/ui", headers={"authorization": f"Bearer {TOKEN}"}).status_code == 401  # the cookie, not a header
 
 
 def test_ui_lists_threads_and_links_with_token(tmp_path):
     client = TestClient(create_app(make_cfg(tmp_path, ui=True), mount_ui=True), headers={"authorization": f"Bearer {TOKEN}"})
     client.post("/api/agents", json={"name": "alice"})
     client.post("/api/threads", json={"subject": "Quarterly plans", "b": "hello"}, headers={"x-agent": "alice"})
-    page = client.get(f"/ui?token={TOKEN}").text
-    assert "Quarterly plans" in page and f"token={TOKEN}" in page and "alice" in page
-    assert f"/ui/thread/1?token={TOKEN}" in page
-    tid = 1
-    detail = client.get(f"/ui/thread/{tid}?token={TOKEN}").text
-    assert "hello" in detail and "alice" in detail and f'href="/ui?token={TOKEN}"' in detail
+    page = client.get(f"/ui?token={TOKEN}").text  # accept-once: cookied from here on
+    assert "Quarterly plans" in page and "alice" in page
+    assert f"token={TOKEN}" not in page and "?token=" not in page  # no credential survives in any link
+    assert 'href="/ui/thread/1"' in page
+    detail = client.get("/ui/thread/1").text  # clean URL, the cookie carries the session
+    assert "hello" in detail and "alice" in detail and "?token=" not in detail
     assert "Agents" in detail
-    assert "alice" in client.get(f"/ui/agents?token={TOKEN}").text
+    assert "alice" in client.get("/ui/agents").text
 
 
 def test_ui_escapes_hostile_content(cli):
@@ -168,11 +169,15 @@ def test_ui_shows_attachments_and_pages_them(cli, tmp_path):
         json={"subject": "with file", "b": "see attach", "files": [{"n": "report.txt", "text": "the payload"}]},
         headers={"x-agent": "alice"},
     ).json()
-    detail = cli.get(f"/ui/thread/{made['t']}?token={TOKEN}").text
-    href = re.search(r'href="(/api/files/\d+/raw[^"]*)"', detail)
-    assert href and "report.txt" in detail
-    raw = cli.get(href.group(1))
-    assert raw.status_code == 200 and raw.text == "the payload"  # token travels in the URL
+    detail = cli.get(f"/ui/thread/{made['t']}?token={TOKEN}").text  # accept-once cookies us
+    href = re.search(r'href="(/ui/files/\d+)"', detail)
+    assert href and "report.txt" in detail and "?token=" not in href.group(1)
+    meta = cli.get(href.group(1))
+    assert 'href="/ui/files/1/raw"' in meta.text  # the metadata page links the cookie-authenticated blob
+    raw = cli.get("/ui/files/1/raw")
+    assert raw.status_code == 200 and raw.text == "the payload"
+    anon = TestClient(create_app(cli.app.state.cfg, mount_ui=True))
+    assert anon.get("/ui/files/1/raw").status_code == 401  # but never without the cookie
 
 
 def test_ui_paging(cli):
@@ -190,7 +195,8 @@ def test_ui_paging(cli):
 def test_root_redirects_browsers_to_the_ui(cli):
     res = cli.get("/", headers={"accept": "text/html"}, follow_redirects=False)
     assert res.status_code == 303 and res.headers["location"].startswith("/ui")
-    assert cli.get("/", headers={"accept": "text/html"}).status_code == 200  # browsers land on /ui
+    landed = cli.get("/", headers={"accept": "text/html"})
+    assert landed.status_code == 401 and "Sign in to read the forum" in landed.text  # browsers land on the login page
     assert cli.get("/").json()["ui"] == "/ui"
 
 

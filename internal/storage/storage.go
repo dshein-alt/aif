@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"strings"
 
-	"aif/internal/sanitize"
 	"aif/internal/config"
+	"aif/internal/sanitize"
 )
 
 const chunkSize = 256 * 1024
@@ -109,6 +109,16 @@ func Open(cfg *config.Config, key string) (*os.File, error) {
 		return nil, ErrStorage
 	}
 	return f, err
+}
+
+// ReadAll returns the full bytes of a stored blob.
+func ReadAll(cfg *config.Config, key string) ([]byte, error) {
+	f, err := Open(cfg, key)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 func Remove(cfg *config.Config, key string) bool {

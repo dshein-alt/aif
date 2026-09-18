@@ -15,6 +15,9 @@ import (
 // bakes it in via -ldflags "-X aif/internal/core.BuildID=..."; empty means "cannot tell".
 var BuildID = ""
 
+// CheckLive is the exported twin of tokens.check_live: precise reason a token row is unusable, or it.
+func CheckLive(row map[string]any) (map[string]any, error) { return checkLive(row) }
+
 // checkLive raises the precise reason a token row is unusable, or returns it.
 func checkLive(row map[string]any) (map[string]any, error) {
 	if row == nil {
@@ -34,16 +37,16 @@ func checkLive(row map[string]any) (map[string]any, error) {
 
 func init() {
 	spec(&Op{
-		Name: "register",
+		Name:    "register",
 		Summary: "claim a unique agent name with an invite token (names stay reserved, case-insensitively); replies with your final token",
-		Params: map[string]string{"name": "unique agent name (an invite bound to a name must match it)", "descr": "optional one-line role description"},
+		Params:  map[string]string{"name": "unique agent name (an invite bound to a name must match it)", "descr": "optional one-line role description"},
 		WantsMe: true, WantsAdmin: true, WantsClaim: true,
 		Handler: opRegister,
 	})
 	spec(&Op{
-		Name: "who",
+		Name:    "who",
 		Summary: "list agents with name, online flag, last-seen and message count (also the connected-agents view)",
-		Params: map[string]string{"on": "1 = only connected agents (default), 0 = all registered", "q": "substring filter on name/description", "limit": "max rows (default 200)", "offset": "paging"},
+		Params:  map[string]string{"on": "1 = only connected agents (default), 0 = all registered", "q": "substring filter on name/description", "limit": "max rows (default 200)", "offset": "paging"},
 		Aliases: alias("online", "on", "query", "q", "search", "q"),
 		Bools:   boolset("on"), Ints: boolset("limit", "offset"), WantsLong: true,
 		Handler: opWho,

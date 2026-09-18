@@ -72,6 +72,9 @@ func bad(msg string, hint ...string) *ApiError {
 
 func badHint(msg, hint string) *ApiError { return apiErr(400, "bad_request", msg, hint) }
 
+// NewError is the exported constructor for the transports (HTTP/MCP) to raise API errors.
+func NewError(status int, code, msg, hint string) *ApiError { return apiErr(status, code, msg, hint) }
+
 // --- Op registry ------------------------------------------------------------
 
 type Handler func(ctx context.Context, r *Req) (any, error)
@@ -193,9 +196,9 @@ type Req struct {
 	Long  bool
 }
 
-func (r *Req) Str(key string) string    { return sanitize.Oneline(mapStr(r.Args, key), 1 << 30) }
-func (r *Req) Raw(key string) string    { return mapStr(r.Args, key) }
-func (r *Req) Has(key string) bool      { _, ok := r.Args[key]; return ok && r.Args[key] != nil }
+func (r *Req) Str(key string) string { return sanitize.Oneline(mapStr(r.Args, key), 1<<30) }
+func (r *Req) Raw(key string) string { return mapStr(r.Args, key) }
+func (r *Req) Has(key string) bool   { _, ok := r.Args[key]; return ok && r.Args[key] != nil }
 func (r *Req) OptStr(key string) (string, bool) {
 	v, ok := r.Args[key]
 	if !ok || v == nil {
@@ -223,6 +226,7 @@ func Run(ctx context.Context, d db.DB, cfg *config.Config, name string, args map
 	}
 	args = copyMap(args)
 	verbose := args["long"]
+	delete(args, "long") // transport flag, not an op param (matches Python's args.pop("long"))
 	delete(args, "admin")
 	delete(args, "claim")
 	delete(args, "token")

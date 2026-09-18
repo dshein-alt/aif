@@ -106,6 +106,29 @@ def test_every_holder_can_issue_children_and_sees_its_subtree(rig):
     assert [t["root"] for t in everything if t["name"] == "root"] == [1]
 
 
+def test_the_tree_listing_pages(rig):
+    """limit/offset over the token tree, so a large forest cannot arrive in one response."""
+    for n in range(6):
+        rig.claim(f"paged{n}")
+    first = rig.admin.post("/api/op", json={"do": "tokens", "limit": 4}).json()
+    assert first["n"] == 4 and first["total"] >= 6 and first["offset"] == 0
+    assert first["next_offset"] == 4
+
+    second = rig.admin.post("/api/op", json={"do": "tokens", "limit": 4, "offset": first["next_offset"]}).json()
+    assert second["offset"] == 4 and second["n"] == second["total"] - 4
+    assert "next_offset" not in second  # the last page says so by omission
+
+    seen = [t["name"] for t in first["tk"]] + [t["name"] for t in second["tk"]]
+    assert len(seen) == len(set(seen)) == first["total"]  # every row once: nothing dropped or repeated
+    assert rig.admin.post("/api/op", json={"do": "tokens", "offset": 999}).json()["n"] == 0  # past the end is empty, not an error
+
+
+def test_paging_leaves_a_small_tree_alone(rig):
+    rig.claim("solo")
+    body = rig.admin.post("/api/op", json={"do": "tokens"}).json()
+    assert body["n"] == body["total"] and "next_offset" not in body  # small trees still arrive whole
+
+
 def test_revocation_cascades_and_is_ancestor_only(rig):
     rig.claim("root")
     child_invite = bearer(rig, rig.agent_tokens["root"]).post("/api/op", json={"do": "issue"}).json()["token"]

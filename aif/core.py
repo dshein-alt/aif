@@ -385,12 +385,13 @@ def op_issue(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", des
 @op(
     "tokens",
     "the token tree you may see: your own subtree, or the whole forest for the gatekeeper (secrets are never listed)",
-    {"name": "filter to one bound name", "dead": "1 = include revoked/expired rows too"},
+    {"name": "filter to one bound name", "dead": "1 = include revoked/expired rows too", "limit": "max rows (default 50)", "offset": "paging"},
     aliases={"agent": "name", "all": "dead"},
+    ints=("limit", "offset"),
     bools=("dead",),
     write=True,
 )
-def op_tokens(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", dead: bool = False, admin: bool = False, token: str | None = None, **_: Any) -> dict[str, Any]:
+def op_tokens(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", dead: bool = False, limit: int = 50, offset: int = 0, admin: bool = False, token: str | None = None, **_: Any) -> dict[str, Any]:
     ts = db.now()
     name = sanitize.fold(name or "").strip().lower()
     if admin:
@@ -399,7 +400,14 @@ def op_tokens(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", de
         mine = tokens.lookup(conn, token or "")
         rows = tokens.subtree(conn, mine["self_token"]) if mine else []
     live = [r for r in rows if (dead or tokens.is_live(r, ts)) and (not name or r["low"] == name)]
-    return {"tk": [token_view(cfg, conn, r, ts) for r in live], "n": len(live)}
+    # Sliced in Python, not SQL: a non-admin listing comes from a parent_token tree walk, so the
+    # set is fully assembled before it can be paged. `total` is free here for the same reason.
+    limit, offset = clamp_limit(cfg, limit, 50), max(offset or 0, 0)
+    page = live[offset : offset + limit]
+    out: dict[str, Any] = {"tk": [token_view(cfg, conn, r, ts) for r in page], "n": len(page), "total": len(live), "offset": offset}
+    if offset + len(page) < len(live):
+        out["next_offset"] = offset + len(page)  # present only while there is a next page
+    return out
 
 
 @op(

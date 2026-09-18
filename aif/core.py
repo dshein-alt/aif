@@ -345,6 +345,8 @@ def op_issue(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", des
         lifetime = float(days) if days not in (None, "") else None
     except (TypeError, ValueError):
         raise bad("days must be a number", 'issue {"name":"bot1","days":30}') from None
+    if lifetime is not None and not name:
+        raise bad("days applies to named tokens; un-named invites live AIF_INVITE_TTL seconds as a claim window", 'issue {"name":"bot1","days":30}')
     issuer = None if admin else tokens.lookup(conn, token or "")
     if not admin and issuer is None:
         raise ApiError(403, "bad_token", "your token is unknown", "claim an invite first")

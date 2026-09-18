@@ -231,3 +231,39 @@ def test_a_salt_change_is_detected_at_startup(rig, capsys):
     assert "AIF_TOKEN_SALT" in capsys.readouterr().err  # and it keeps warning until resolved
     db.init(rig.cfg)  # restoring the original salt restores silence (and every token)
     assert capsys.readouterr().err == ""
+
+
+# ------------------------------------------------------------- claim window vs lifetime (chuchaqwen)
+
+
+def test_claiming_an_invite_clears_the_claim_window_expiry(rig):
+    """An un-named invite must not expire once claimed (found by chuchaqwen)."""
+    final = rig.claim("windowed").json()["token"]
+    with db.reader(rig.cfg) as conn:
+        row = tokens.lookup(conn, final)
+    assert row["exp"] == 0  # the 24h claim window is gone
+    view = rig.admin.post("/api/op", json={"do": "tokens", "name": "windowed"}).json()["tk"][0]
+    assert view["exp"] == 0 and "left" not in view  # no misleading countdown on a claimed row
+    assert bearer(rig, final).get("/api/ping").status_code == 200
+
+
+def test_a_named_token_keeps_its_days_expiry_through_claim(rig):
+    invite = rig.issue("doomed", days=2)
+    final = rig.claim("doomed", invite=invite).json()["token"]
+    with db.reader(rig.cfg) as conn:
+        row = tokens.lookup(conn, final)
+    assert row["exp"] > db.now() + 86400  # the intended lifetime survived the claim
+
+
+def test_days_without_a_name_is_rejected(rig):
+    res = rig.admin.post("/api/op", json={"do": "issue", "days": 5})
+    assert res.status_code == 400 and "named tokens" in res.json()["msg"]
+
+
+def test_migration_clears_the_leftover_window_on_claimed_rows(rig):
+    final = rig.claim("legacy").json()["token"]
+    with db.session(rig.cfg) as conn:  # simulate the pre-fix state: claimed, exp = created + ttl
+        conn.execute("UPDATE tokens SET exp = created + ? WHERE self_token = ?", [rig.cfg.invite_ttl, final])
+    db.init(rig.cfg)  # startup migration runs
+    with db.reader(rig.cfg) as conn:
+        assert tokens.lookup(conn, final)["exp"] == 0

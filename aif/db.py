@@ -119,7 +119,7 @@ def init(cfg: Config) -> None:
     os.makedirs(cfg.attachments_dir, exist_ok=True)
     with connect(cfg) as conn:
         conn.executescript(SCHEMA)
-        migrate(conn)
+        migrate(conn, cfg)
         ensure_system(conn)
         check_salt(cfg, conn)
 
@@ -150,11 +150,20 @@ def check_salt(cfg: Config, conn: sqlite3.Connection) -> None:
         )
 
 
-def migrate(conn: sqlite3.Connection) -> None:
+def migrate(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     """Additive schema evolution for databases created by an older release."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(threads)")}
     if "locked" not in cols:  # threads gained the locked flag in 0.2
         conn.execute("ALTER TABLE threads ADD COLUMN locked INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    if cfg is not None:
+        # 0.2.x bug: claimed invites kept the 24h claim window as a hard expiry. Clear it on rows
+        # whose exp still matches exactly created + invite_ttl (a deliberate days=1 lifetime is
+        # indistinguishable and accepted as collateral: re-issue if that was you).
+        conn.execute(
+            "UPDATE tokens SET exp = 0 WHERE claimed IS NOT NULL AND exp != 0 AND ABS(exp - (created + ?)) < 2",
+            [cfg.invite_ttl],
+        )
         conn.commit()
 
 

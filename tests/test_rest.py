@@ -227,7 +227,6 @@ def test_thread_pagination(cli):
     }
     assert cli.get(f"/api/threads/{tid}?limit=0").json()["err"] == "bad_request"
 
-
 def test_limit_is_clamped_to_max_page_size(tmp_path):
     cli = make_client(tmp_path, max_page_size=3)
     cli.headers["authorization"] = f"Bearer {TOKEN}"

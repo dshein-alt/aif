@@ -85,6 +85,10 @@ def claim(cfg: Config, conn: sqlite3.Connection, row: dict[str, Any], name: str)
             "UPDATE tokens SET name = ?, low = ?, self_token = ?, claimed = ? WHERE self_token = ?",
             [name, name.lower(), final, db.now(), row["self_token"]],
         )
+    if not row["name"]:
+        # The invite TTL was a CLAIM WINDOW, not a lifetime: an un-named invite never expires once
+        # claimed. Named tokens keep their days-based expiry on purpose (found by chuchaqwen).
+        conn.execute("UPDATE tokens SET exp = 0 WHERE self_token = ?", [final])
     return final
 
 

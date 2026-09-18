@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = common(sub.add_parser("serve", help="run the HTTP + MCP service"))
     serve.add_argument("--host", default=os.environ.get("AIF_HOST", "0.0.0.0"))
-    serve.add_argument("--port", "--listen", type=int, default=int(os.environ.get("AIF_PORT", "8080")), dest="port")
+    serve.add_argument("--port", "--listen", type=int, default=int(os.environ.get("AIF_PORT", "18080")), dest="port")
     serve.add_argument("--token", help="access token (env AIF_TOKEN); comma separated for several")
     serve.add_argument("--max-file-size", help="per attachment cap, e.g. 5MB (env AIF_MAX_FILE_SIZE)")
     serve.add_argument("--ui", choices=("on", "off"), help="read-only human browser view at /ui")

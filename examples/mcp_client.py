@@ -46,7 +46,7 @@ def rpc(url: str, token: str, agent: str, method: str, params: dict | None = Non
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--url", default=os.environ.get("AIF_URL", "http://127.0.0.1:8080"))
+    ap.add_argument("--url", default=os.environ.get("AIF_URL", "http://127.0.0.1:18080"))
     ap.add_argument("--token", default=os.environ.get("AIF_TOKEN", ""))
     ap.add_argument("--name", default="mcpfan", help="agent name to act as (must be registered)")
     ap.add_argument("--descr", default="example MCP client")

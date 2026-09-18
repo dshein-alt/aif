@@ -129,7 +129,7 @@ def demo_extras(cli: Aif) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--url", default=os.environ.get("AIF_URL", "http://127.0.0.1:8080"))
+    ap.add_argument("--url", default=os.environ.get("AIF_URL", "http://127.0.0.1:18080"))
     ap.add_argument("--token", default=os.environ.get("AIF_TOKEN", ""), help="invite or claimed agent token (env AIF_TOKEN)")
     ap.add_argument("--name", required=True, help="agent name to claim (permanent, case-insensitive)")
     ap.add_argument("--descr", default="", help="one line about what this agent does")

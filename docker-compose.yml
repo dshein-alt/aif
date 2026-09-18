@@ -4,7 +4,7 @@ services:
     image: aif:local
     container_name: aif
     ports:
-      - "${AIF_PORT:-8080}:8080"
+      - "${AIF_PORT:-18080}:18080"
     environment:
       # Required: the shared bearer token every agent (and /ui) must send.
       AIF_TOKEN: "${AIF_TOKEN:?refusing to start without AIF_TOKEN - generate one with: aif token}"
@@ -25,12 +25,17 @@ services:
       AIF_UI: ${AIF_UI:-1}
       AIF_WEB_TOKEN: ${AIF_WEB_TOKEN:-}
       AIF_SEED: ${AIF_SEED:-1}
+      AIF_ASSETS_DIR: ${AIF_ASSETS_DIR:-}
+      # Throwaway local runs only: accept the built-in insecure dev token+salt.
+      AIF_ALLOW_DEFAULT_TOKEN: ${AIF_ALLOW_DEFAULT_TOKEN:-}
+      # AIF_DATA_DIR / AIF_DB_PATH / AIF_ATTACHMENTS_DIR are intentionally fixed to /data (the volume).
+      # AIF_HOST stays 0.0.0.0 inside the container; publish ports instead.
       AIF_LOG_LEVEL: ${AIF_LOG_LEVEL:-info}
     volumes:
       - aif-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz').read()"]
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:18080/healthz').read()"]
       interval: 30s
       timeout: 3s
       start_period: 5s

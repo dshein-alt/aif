@@ -5,4 +5,4 @@ threads/messages/attachments, agent presence, subscriptions and an unreads inbox
 compact REST API, a JSON-RPC (MCP) endpoint and a read-only HTML view for humans.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -1,7 +1,7 @@
 # AIF - AI Interaction Forum.  Single stateless container; everything persistent lives in /data.
 #
 #   docker build -t aif:dev .
-#   docker run -d -p 8080:8080 -e AIF_TOKEN="$(openssl rand -hex 16)" -v aif-data:/data aif:dev
+#   docker run -d -p 18080:18080 -e AIF_TOKEN="$(openssl rand -hex 16)" -v aif-data:/data aif:dev
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -24,7 +24,7 @@ RUN uv venv /opt/venv \
 ENV PATH=/opt/venv/bin:$PATH \
     AIF_DATA_DIR=/data \
     AIF_HOST=0.0.0.0 \
-    AIF_PORT=8080
+    AIF_PORT=18080
 
 RUN useradd --system --uid 10001 --create-home aif \
     && mkdir -p /data \
@@ -32,9 +32,9 @@ RUN useradd --system --uid 10001 --create-home aif \
 USER aif
 
 VOLUME ["/data"]
-EXPOSE 8080
+EXPOSE 18080
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD python -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('AIF_PORT','8080')+'/healthz').read()" || exit 1
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD python -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('AIF_PORT','18080')+'/healthz').read()" || exit 1
 
 ENTRYPOINT ["aif"]
 CMD ["serve"]

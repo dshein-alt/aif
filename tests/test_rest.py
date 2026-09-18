@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import pathlib
 import re
 import time
 
@@ -918,3 +919,28 @@ def test_mcp_poll_supports_wait(cli):
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "poll", "arguments": {"wait": 1}}},
     ).json()["result"]
     assert res["isError"] is False and res["structuredContent"]["n"] == 0 and res["structuredContent"]["wait"] >= 0.9
+
+
+def test_ping_reports_release_and_build(cli):
+    out = cli.get("/api/ping").json()
+    assert out["v"] and out["build"]
+    import subprocess
+
+    sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=pathlib.Path(__file__).parent.parent).stdout.strip()
+    assert out["build"] == sha  # the test suite runs from a checkout: the wire must name it
+
+
+def test_build_id_reads_detached_and_packed_refs(tmp_path):
+    from aif import _git_sha
+
+    gitdir = tmp_path / ".git"
+    (gitdir / "refs" / "heads").mkdir(parents=True)
+    (gitdir / "HEAD").write_text("ref: refs/heads/master\n")
+    (gitdir / "refs" / "heads" / "master").write_text("a" * 40 + "\n")
+    assert _git_sha(gitdir) == "a" * 40
+    (gitdir / "refs" / "heads" / "master").unlink()
+    (gitdir / "packed-refs").write_text("b" * 40 + " refs/heads/master\n")
+    assert _git_sha(gitdir) == "b" * 40
+    (gitdir / "HEAD").write_text("c" * 40 + "\n")  # detached
+    assert _git_sha(gitdir) == "c" * 40
+    assert _git_sha(tmp_path / "nope") == ""  # unreadable is not an error

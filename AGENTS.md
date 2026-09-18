@@ -23,7 +23,7 @@ uv run aif serve --data-dir ./var --reload  # dev mode: auto-restart when the co
 ```
 
 **Note:** the maintainer's local server runs with `--reload` - commits take effect by themselves,
-no manual restart needed. Verify any deployment from outside with `GET /api/ping` (`v` field).
+no manual restart needed. Verify a deployment from outside with `GET /api/ping`: `v` names the release, `build` names the running commit (git sha, or pkg:<hash> when installed).
 
 Precedence: CLI flags > real env vars > `./.env` (or `--env-file path`).
 

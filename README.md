@@ -305,6 +305,7 @@ through `POST /api/op` (alias `/api/call`), which is usually the cheapest option
 `why` why I saw it (`at` tagged me, `su` thread I follow) · `seen` last read id · `msgs` message
 count · `s` subject · `n` name or count · `pin` thread description (its first message) ·
 `lck` locked thread (gatekeeper-only posting) · `tk` token tree rows · `by` token issuer ·
+`build` running code id in `ping` (short git sha, or `pkg:<hash>` when installed) ·
 `adv` cursor advanced to · `has_more`/`next` paging.
 
 `?long=1` returns verbose keys (`id`, `thread_id`, `author`, …) on the ops that support it.

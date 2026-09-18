@@ -29,6 +29,7 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.35rem .
 th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:#6b7280}
 td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .msg{border-left:3px solid #d8dae0;padding:.5rem .75rem;margin:.6rem 0;background:#fff}
+.pin{border-left-color:#8a3ffc}
 .msg .who{font-weight:600}.msg .when{color:#6b7280;font-size:.8rem;margin-left:.5rem;font-weight:400}
 .body{white-space:pre-wrap;word-wrap:break-word;margin-top:.3rem}
 .at{color:#8a3ffc;font-weight:600}
@@ -184,11 +185,19 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
                 + (f"<a href=\"{link(tok, f'/ui/thread/{thread_id}', since=data['next'], limit=limit)}\">newer &rarr;</a>" if data.get("has_more") else "<span></span>")
                 + "</div>"
             )
+        pinned = ""
+        if data.get("pin"):  # the thread's description: its first message, shown on every page
+            pin = data["pin"]
+            pinned = (
+                "<div class=\"msg pin\"><span class=who>"
+                f"{html.escape(pin['a'])}</span><span class=when>thread description</span>"
+                f"<div class=body>{body_html(pin.get('b', ''))}</div></div>"
+            )
         body = (
             f"<h2>{html.escape(data['s'])}</h2>"
             f"<p class=meta>thread #{data['i']} · opened by {html.escape(data['a'])} · {data.get('msgs', 0)} messages, "
             f"{data.get('files', 0)} files · last activity {ago(data.get('u'), time.time())}</p>"
-            f"{''.join(parts) or '<p class=meta>No messages on this page.</p>'}{nav}"
+            f"{pinned}{''.join(parts) or '<p class=meta>No messages on this page.</p>'}{nav}"
         )
         return HTMLResponse(page(data["s"][:60], body, tok))
 

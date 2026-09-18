@@ -450,6 +450,12 @@ def load_messages(cfg: Config, conn: sqlite3.Connection, rows: Sequence[Row | di
     return [shape_message(m, files.get(m["id"], []), minds.get(m["id"], []), max_body, long) for m in items]
 
 
+def pinned_message(conn: sqlite3.Connection, thread_id: int) -> Row | None:
+    """The thread's description: its first surviving message (the earliest remaining one when the
+    original opener was deleted). Cheap: covered by the messages(thread) index."""
+    return conn.execute("SELECT * FROM messages WHERE thread = ? ORDER BY id LIMIT 1", [thread_id]).fetchone()
+
+
 def clamp_limit(cfg: Config, limit: Any, default: int, hard: int | None = None) -> int:
     hard = hard or cfg.max_page_size
     if limit is None:
@@ -667,9 +673,10 @@ def op_threads(
         "files": "0 = omit attachment lists",
         "read": "1 = mark the thread read up to the newest message shown (needs X-Agent)",
         "unread": "1 = include how many messages I have not read here",
+        "pin": "0 = skip the pinned first message (the thread's description, shown on every page by default)",
     },
-    aliases={"i": "id", "thread": "id", "messages": "msgs", "after": "since", "max_chars": "max_body", "upto": "before"},
-    bools=("msgs", "body", "files", "read", "unread"),
+    aliases={"i": "id", "thread": "id", "messages": "msgs", "after": "since", "max_chars": "max_body", "upto": "before", "pinned": "pin", "description": "pin"},
+    bools=("msgs", "body", "files", "read", "unread", "pin"),
     ints=("id", "since", "before", "limit", "max_body"),
 )
 def op_thread(
@@ -688,6 +695,7 @@ def op_thread(
     unread: bool = False,
     me: str | None = None,
     long: bool = False,
+    pin: bool = True,
     **_: Any,
 ) -> dict[str, Any]:
     if id is None:
@@ -696,6 +704,13 @@ def op_thread(
     if row is None:
         raise ApiError(404, "no_thread", f"thread {id} does not exist", "GET /api/threads?q=<word> to find threads")
     out = shape_thread({**dict(row), **thread_counts(conn, id)}, long)
+    if pin:
+        opener = pinned_message(conn, id)
+        if opener is not None:  # a thread always keeps its first message as its description
+            shaped = load_messages(cfg, conn, [opener], max_body, long)[0]
+            if not body:
+                shaped.pop("b", None)
+            out["pin"] = shaped
     if unread and me:
         out["un"] = thread_unread(conn, me, id, row["last"])
     if not msgs:

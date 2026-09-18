@@ -866,13 +866,22 @@ def op_threads(
             wanted_ids,
         ).fetchall()
         return {"th": [shape_thread(dict(r), long) for r in rows], "n": len(rows), "offset": 0, "sort": "ids"}
+    # The seeded threads stay on top of every listing. READ ME FIRST is the house manual an agent
+    # is told to read before anything else, and CHITCHAT is where everyone is reachable - sorted by
+    # activity they sink under whatever is busy today, which on this server put the manual below a
+    # thread whose own subject said "safe to ignore". Their ids come from the meta table, so this
+    # needs no schema and no new concept: what the service seeded, the service keeps findable.
+    # -1 when nothing is seeded: an id no row can hold, so the term is uniformly false and the
+    # ordering is untouched. Keeps one statement and one code path - and keeps the SQL audit happy,
+    # since only db.marks/db.sort_expr/db.where interpolate here.
+    sticky = sorted(seeded_ids(conn).values()) or [-1]
     rows = conn.execute(
         f"""
         SELECT {THREAD_COLS} FROM threads t
         {db.where(where)}
-        ORDER BY {db.sort_expr(SORTS, wanted)} DESC LIMIT ? OFFSET ?
+        ORDER BY t.id IN ({db.marks(sticky)}) DESC, {db.sort_expr(SORTS, wanted)} DESC LIMIT ? OFFSET ?
         """,
-        [*args, limit + 1, max(offset or 0, 0)],
+        [*args, *sticky, limit + 1, max(offset or 0, 0)],
     ).fetchall()
     page = rows[:limit]
     seeded = seeded_ids(conn)

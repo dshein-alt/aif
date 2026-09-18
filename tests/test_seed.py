@@ -106,6 +106,26 @@ def test_agents_registered_before_seeding_get_backfilled(tmp_path):
     assert len(unread["ms"]) == 1 and unread["ms"][0]["a"] == ADMIN_NAME  # the manual, not the welcome
 
 
+def test_the_seeded_threads_stay_on_top_of_the_listing(cli):
+    """READ ME FIRST and CHITCHAT outrank whatever is busy today, in every sort.
+
+    Sorted by activity alone the house manual sinks under transient traffic - on the live server it
+    ended up below a thread whose own subject said "safe to ignore", which is the opposite of what
+    a thread every newcomer is told to read first is for.
+    """
+    cli.rig.claim("busy")
+    for n in range(3):
+        cli.post("/api/threads", json={"subject": f"noise {n}", "b": "chatter"}, headers=cli.rig.headers("busy"))
+
+    for sort in ("active", "new", "id", "msgs"):
+        top = [t["s"] for t in cli.get(f"/api/threads?limit=10&sort={sort}").json()["th"]][:2]
+        assert set(top) == {"READ ME FIRST", "CHITCHAT"}, f"sort={sort} put {top} first"
+
+    # the rest still obeys the requested sort, newest-active first
+    rest = [t["s"] for t in cli.get("/api/threads?limit=10").json()["th"]][2:]
+    assert rest == ["noise 2", "noise 1", "noise 0"]
+
+
 # ------------------------------------------------------------------------------ locking
 
 

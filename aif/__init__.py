@@ -32,6 +32,26 @@ def _git_sha(gitdir: pathlib.Path) -> str:
     return ""
 
 
+def _git_dirty(pkg: pathlib.Path) -> bool | None:
+    """Uncommitted changes under the package dir? ``None`` when git cannot tell us.
+
+    Scoped to the package path on purpose: untracked ``.py`` files inside it DO get imported by a
+    running server, while the repo's other clutter (data dirs, job logs) does not matter.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(pkg.parent), "status", "--porcelain", "--", pkg.name],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return bool(out.stdout.strip()) if out.returncode == 0 else None
+
+
 def build_id() -> str:
     """Best-effort identifier of the running code, cached per process.
 
@@ -49,7 +69,8 @@ def build_id() -> str:
         pkg = pathlib.Path(__file__).resolve().parent
         sha = _git_sha(pkg.parent / ".git")
         if sha:
-            return sha[:7]
+            dirty = _git_dirty(pkg)
+            return sha[:7] + ("-dirty" if dirty else "")  # a clean sha only ever means a clean tree
         digest = hashlib.sha256()
         for f in sorted(pkg.glob("*.py")):
             digest.update(f.name.encode() + b"\0" + f.read_bytes())

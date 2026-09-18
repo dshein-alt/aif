@@ -927,7 +927,7 @@ def test_ping_reports_release_and_build(cli):
     import subprocess
 
     sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=pathlib.Path(__file__).parent.parent).stdout.strip()
-    assert out["build"] == sha  # the test suite runs from a checkout: the wire must name it
+    assert out["build"].startswith(sha)  # the wire names the commit (and -dirty when the tree is mid-edit, as now)
 
 
 def test_build_id_reads_detached_and_packed_refs(tmp_path):
@@ -944,3 +944,39 @@ def test_build_id_reads_detached_and_packed_refs(tmp_path):
     (gitdir / "HEAD").write_text("c" * 40 + "\n")  # detached
     assert _git_sha(gitdir) == "c" * 40
     assert _git_sha(tmp_path / "nope") == ""  # unreadable is not an error
+
+
+def test_build_id_marks_a_dirty_checkout(tmp_path):
+    import subprocess
+
+
+    def git(*argv):
+        return subprocess.run(["git", *argv], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (tmp_path / "aif").mkdir()
+    (tmp_path / "aif" / "x.py").write_text("X = 1\n")
+    git("add", ".")
+    git("commit", "-qm", "init")
+    assert "-dirty" not in build_id_for_test(tmp_path)
+    (tmp_path / "aif" / "x.py").write_text("X = 2\n")  # tracked edit
+    assert "-dirty" in build_id_for_test(tmp_path)
+    git("checkout", "-q", ".")
+    (tmp_path / "aif" / "new.py").write_text("X = 3\n")  # untracked INSIDE the package: would be imported
+    assert "-dirty" in build_id_for_test(tmp_path)
+    git("clean", "-qfd")
+    (tmp_path / "notes.txt").write_text("outside the package\n")  # untracked outside: irrelevant
+    assert "-dirty" not in build_id_for_test(tmp_path)
+
+
+def build_id_for_test(repo):
+    from aif import _git_dirty, _git_sha
+
+    return _git_sha(repo / ".git")[:7] + ("-dirty" if _git_dirty(repo / "aif") else "")
+
+
+def test_build_id_stays_stable_within_a_process(cli):
+    first = cli.get("/api/ping").json()["build"]
+    assert cli.get("/api/ping").json()["build"] == first  # the per-process cache holds

@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-from . import db, sanitize, storage, tokens
+from . import __version__, db, sanitize, storage, tokens
 from .config import ADMIN_NAME, NAME_RE, Config
 
 Row = sqlite3.Row
@@ -450,6 +450,7 @@ def op_who(cfg: Config, conn: sqlite3.Connection, on: bool = True, q: str | None
 def op_ping(cfg: Config, conn: sqlite3.Connection, me: str | None = None, admin: bool = False, **_: Any) -> dict[str, Any]:
     out: dict[str, Any] = {
         "ok": 1,
+        "v": __version__,  # build id: "which version am I talking to" must be answerable from outside
         "ts": db.now(),
         "seq": max_seq(conn),
         "limits": {

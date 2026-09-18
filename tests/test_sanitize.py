@@ -170,7 +170,7 @@ def test_dangerous_looking_content_survives_verbatim(cli):
     # ... and the schema is untouched afterwards
     cli.post("/api/agents", json={"name": "carol"})
     assert cli.get("/api/threads?limit=100").json()["n"] == len(PROBES)
-    assert {a["n"] for a in cli.get("/api/agents?limit=100").json()["a"]} == {"alice", "bob", "carol"}
+    assert {a["n"] for a in cli.get("/api/agents?limit=100").json()["a"]} == {"alice", "bob", "carol", "gatekeeper"}
 
 
 def test_invisible_characters_cannot_bypass_a_taken_name(cli):
@@ -187,7 +187,7 @@ def test_invisible_characters_are_canonicalised_not_stored(cli):
     for candidate in ["sp ace", "café", "a\nb", "-", "x" * 65, "no$dollar", "ev\u202e il"]:
         res = cli.post("/api/agents", json={"name": candidate})
         assert res.status_code == 400 and res.json()["err"] == "bad_request", candidate
-    assert {a["n"] for a in cli.get("/api/agents?limit=100").json()["a"]} == {"alice", "bob", "evil", "hidden"}
+    assert {a["n"] for a in cli.get("/api/agents?limit=100").json()["a"]} == {"alice", "bob", "evil", "hidden", "gatekeeper"}
 
 
 def test_mentions_resolve_through_invisible_characters(cli):

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 import re
 from dataclasses import dataclass, field
 
 DEFAULT_TOKEN = "aif-dev-token"
+
+#: The service's own system account. It owns seeded content and hands out tokens; no client may
+#: register it, and only a holder of ``AIF_ADMIN_TOKEN`` may act as it.
+ADMIN_NAME = "gatekeeper"
+
+SYSTEM_DESCR = "service system account: owns the seeded threads and issues agent tokens; not a user"
 
 #: Agent / file-name shape accepted by the service.
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$")
@@ -50,6 +57,7 @@ class Config:
     """Every tunable of the service. Use :meth:`from_env` (or the env of the process)."""
 
     tokens: list[str] = field(default_factory=list)
+    admin_tokens: list[str] = field(default_factory=list)  # empty = whatever ``tokens`` holds (AIF_TOKEN is the admin token by default)
     data_dir: str = "/data"
     db_path: str = ""  # empty = <data_dir>/aif.db
     attachments_dir: str = ""  # empty = <data_dir>/attachments
@@ -68,6 +76,7 @@ class Config:
     def __post_init__(self) -> None:
         """Normalise the storage layout: db and blob dir always live under *data_dir*."""
         self.tokens = [str(t) for t in (self.tokens or []) if str(t).strip()]
+        self.admin_tokens = [str(t) for t in (self.admin_tokens or []) if str(t).strip()] or list(self.tokens)
         self.data_dir = str(self.data_dir)
         if not self.db_path:
             self.db_path = os.path.join(self.data_dir, "aif.db")
@@ -75,12 +84,26 @@ class Config:
             self.attachments_dir = os.path.join(self.data_dir, "attachments")
         self.db_path, self.attachments_dir = str(self.db_path), str(self.attachments_dir)
 
+    @property
+    def all_tokens(self) -> list[str]:
+        """Every token this service accepts, admin ones first."""
+        return [*self.admin_tokens, *[t for t in self.tokens if t not in self.admin_tokens]]
+
+    def agent_token_ok(self, token: str) -> bool:
+        """Does this token grant ordinary agent access? (constant-time against every accepted value)"""
+        return any(hmac.compare_digest(token, known) for known in self.all_tokens)
+
+    def admin_token_ok(self, token: str) -> bool:
+        """Does this token grant gatekeeper privileges?"""
+        return any(hmac.compare_digest(token, known) for known in self.admin_tokens)
+
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
         env = os.environ if env is None else env
         data_dir = _get(env, "AIF_DATA_DIR", "/data")
         return cls(
             tokens=[t.strip() for t in _get(env, "AIF_TOKEN", DEFAULT_TOKEN).split(",") if t.strip()],
+            admin_tokens=[t.strip() for t in _get(env, "AIF_ADMIN_TOKEN", "").split(",") if t.strip()],
             data_dir=data_dir,
             db_path=_get(env, "AIF_DB_PATH", os.path.join(data_dir, "aif.db")),
             attachments_dir=_get(env, "AIF_ATTACHMENTS_DIR", os.path.join(data_dir, "attachments")),
@@ -102,13 +125,13 @@ class Config:
         warnings: list[str] = []
         if not self.tokens:
             raise ConfigError("AIF_TOKEN is empty - refusing to start without a token")
-        if DEFAULT_TOKEN in self.tokens:
+        if DEFAULT_TOKEN in self.all_tokens:
             if not self.allow_default_token:
                 raise ConfigError(
                     f"AIF_TOKEN is the insecure default {DEFAULT_TOKEN!r}; set a real token, "
                     "or set AIF_ALLOW_DEFAULT_TOKEN=1 to accept it"
                 )
-            warnings.append(f"using insecure default AIF_TOKEN={DEFAULT_TOKEN!r}")
+            warnings.append(f"using insecure default token (AIF_TOKEN / AIF_ADMIN_TOKEN = {DEFAULT_TOKEN!r})")
         for name in ("max_file_size", "max_files_per_message", "max_message_length", "max_page_size"):
             if getattr(self, name) <= 0:
                 raise ConfigError(f"config {name} must be positive")

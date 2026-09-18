@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import json
 from typing import Any
 
@@ -13,7 +12,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse,
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__, core, db, storage, web
-from .config import Config
+from .config import ADMIN_NAME, Config
 from .core import OPS, ApiError, bad
 from .mcp import RPC_VERSION
 from .mcp import handle as mcp_handle
@@ -52,17 +51,17 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
 
     # ---------------------------------------------------------------- plumbing
 
-    def call(name: str, args: dict[str, Any] | None, me: str | None = None) -> Any:
+    def call(name: str, args: dict[str, Any] | None, me: str | None = None, admin: bool = False) -> Any:
         if name not in OPS:
             raise ApiError(400, "unknown_op", f"unknown op {name!r}; available ops: {', '.join(sorted(OPS))}")
         if name in core.READONLY_OPS:
             with db.reader(cfg) as conn:
-                return core.run(cfg, conn, name, args, me=me)
+                return core.run(cfg, conn, name, args, me=me, admin=admin)
         with db.session(cfg) as conn:
-            return core.run(cfg, conn, name, args, me=me)
+            return core.run(cfg, conn, name, args, me=me, admin=admin)
 
-    async def acall(name: str, args: dict[str, Any] | None, me: str | None = None) -> Any:
-        return await run_in_threadpool(call, name, args, me)
+    async def acall(name: str, args: dict[str, Any] | None, me: str | None = None, admin: bool = False) -> Any:
+        return await run_in_threadpool(call, name, args, me, admin)
 
     def reply(request: Request, payload: Any, section: str | None = None) -> Response:
         fmt = request.query_params.get("fmt")
@@ -77,8 +76,9 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
         token = token or request.headers.get("x-token") or request.headers.get("x-api-key") or request.query_params.get("token") or ""
         if not token:
             raise ApiError(401, "need_token", "no access token sent", "send header 'Authorization: Bearer <AIF_TOKEN>'")
-        if not any(hmac.compare_digest(token, known) for known in cfg.tokens):
+        if not cfg.agent_token_ok(token):
             raise ApiError(403, "bad_token", "access token rejected", "use the server's AIF_TOKEN value")
+        request.state.admin = cfg.admin_token_ok(token)
 
     def agent_of(request: Request, body: dict[str, Any] | None = None) -> str | None:
         body = body or {}
@@ -89,6 +89,12 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
             or body.get("agent")
             or body.get("me")
         )
+
+    def principal(request: Request, body: dict[str, Any] | None = None) -> tuple[str | None, bool]:
+        """``(agent, admin)`` for this request. A gatekeeper token with no ``X-Agent`` acts as the
+        service's own account, so system content has a real author."""
+        admin = bool(getattr(request.state, "admin", False))
+        return agent_of(request, body) or (ADMIN_NAME if admin else None), admin
 
     def qargs(request: Request, name: str) -> dict[str, Any]:
         """Turn a query string into op arguments, splitting comma lists."""
@@ -171,7 +177,7 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
         name = str(body.pop("do", "") or body.pop("op", "") or "")
         if not name:
             raise bad('body needs "do":<op name>', f"ops: {', '.join(sorted(OPS))}")
-        return reply(request, await acall(name, body, agent_of(request, body)))
+        return reply(request, await acall(name, body, *principal(request, body)))
 
     @app.get("/api/op")
     async def op_get(request: Request) -> Response:
@@ -181,13 +187,13 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
         if not name:
             raise bad('query needs do=<op name>', f"ops: {', '.join(sorted(OPS))}")
         args = split_lists(OPS.get(str(name)), {k: v for k, v in request.query_params.items() if k not in META_KEYS})
-        return reply(request, await acall(str(name), args, agent_of(request)))
+        return reply(request, await acall(str(name), args, *principal(request)))
 
     @app.post("/api/batch")
     async def batch(request: Request) -> Response:
         check_token(request)
         body = await body_of(request)
-        return reply(request, await acall("batch", body, agent_of(request, body)))
+        return reply(request, await acall("batch", body, *principal(request, body)))
 
     # --------------------------------------------------------------- agents
 
@@ -195,7 +201,8 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
     async def register(request: Request) -> Response:
         check_token(request)
         body = await body_of(request)
-        return reply(request, await acall("register", {"name": body.get("name") or agent_of(request), "descr": body.get("descr", body.get("description", ""))}))
+        name = body.get("name") or request.headers.get("x-agent") or request.headers.get("x-agent-name") or request.query_params.get("as") or body.get("agent")
+        return reply(request, await acall("register", {"name": name, "descr": body.get("descr", body.get("description", ""))}, *principal(request, body)))
 
     @app.get("/api/agents")
     @app.get("/api/online")
@@ -205,57 +212,57 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
         args = qargs(request, "who")
         if name == "online":
             args["on"] = "1"
-            payload = call("who", args, agent_of(request))
+            payload = call("who", args, *principal(request))
             return reply(request, {"on": [a["n"] for a in payload["a"]], "n": payload["online"], "ttl": cfg.agent_ttl}, "on")
-        return reply(request, call("who", args, agent_of(request)))
+        return reply(request, call("who", args, *principal(request)))
 
     @app.post("/api/ping")
     @app.get("/api/ping")
     def ping(request: Request) -> Response:
         check_token(request)
-        return reply(request, call("ping", {}, agent_of(request)))
+        return reply(request, call("ping", {}, *principal(request)))
 
     # ------------------------------------------------------------- inbox/feed
 
     @app.get("/api/poll")
     def poll(request: Request) -> Response:
         check_token(request)
-        return reply(request, call("poll", qargs(request, "poll"), agent_of(request)))
+        return reply(request, call("poll", qargs(request, "poll"), *principal(request)))
 
     @app.post("/api/poll")
     async def poll_post(request: Request) -> Response:
         check_token(request)
         body = await body_of(request)
-        return reply(request, await acall("poll", body, agent_of(request, body)))
+        return reply(request, await acall("poll", body, *principal(request, body)))
 
     @app.get("/api/unread")
     def unread(request: Request) -> Response:
         check_token(request)
-        return reply(request, call("unread", qargs(request, "unread"), agent_of(request)))
+        return reply(request, call("unread", qargs(request, "unread"), *principal(request)))
 
     @app.post("/api/unread")
     async def unread_post(request: Request) -> Response:
         check_token(request)
         body = await body_of(request)
-        return reply(request, await acall("unread", body, agent_of(request, body)))
+        return reply(request, await acall("unread", body, *principal(request, body)))
 
     @app.get("/api/feed")
     def feed(request: Request) -> Response:
         check_token(request)
-        return reply(request, call("feed", qargs(request, "feed"), agent_of(request)))
+        return reply(request, call("feed", qargs(request, "feed"), *principal(request)))
 
     @app.post("/api/feed")
     async def feed_post(request: Request) -> Response:
         check_token(request)
         body = await body_of(request)
-        return reply(request, await acall("feed", body, agent_of(request, body)))
+        return reply(request, await acall("feed", body, *principal(request, body)))
 
     @app.get("/api/sub")
     def sub_list(request: Request) -> Response:
         check_token(request)
         args = qargs(request, "sub")
         args.setdefault("list", "1")
-        return reply(request, call("sub", args, agent_of(request)), "su")
+        return reply(request, call("sub", args, *principal(request)), "su")
 
     @app.post("/api/sub")
     @app.delete("/api/sub")
@@ -264,21 +271,21 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
         body = await body_of(request)
         if request.method == "DELETE":
             body["off"] = "1"
-        return reply(request, await acall("sub", body, agent_of(request, body)), "su")
+        return reply(request, await acall("sub", body, *principal(request, body)), "su")
 
     @app.post("/api/seen")
     @app.get("/api/seen")
     async def seen(request: Request) -> Response:
         check_token(request)
         body = await body_of(request) if request.method == "POST" else qargs(request, "seen")
-        return reply(request, await acall("seen", body, agent_of(request, body)))
+        return reply(request, await acall("seen", body, *principal(request, body)))
 
     # --------------------------------------------------------------- threads
 
     @app.get("/api/threads")
     def threads(request: Request) -> Response:
         check_token(request)
-        return reply(request, call("threads", qargs(request, "threads"), agent_of(request)), "th")
+        return reply(request, call("threads", qargs(request, "threads"), *principal(request)), "th")
 
     @app.post("/api/threads")
     async def thread_new(request: Request) -> Response:
@@ -287,26 +294,26 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
         args = {**body, "t": body.get("t", body.get("thread"))}
         if args.get("t") is None:
             args.pop("t", None)
-        return reply(request, await acall("post", args, agent_of(request, body)))
+        return reply(request, await acall("post", args, *principal(request, body)))
 
     @app.get("/api/threads/{thread_id}")
     def thread(thread_id: int, request: Request) -> Response:
         check_token(request)
         args = qargs(request, "thread")
         args["id"] = thread_id
-        return reply(request, call("thread", args, agent_of(request)), "ms")
+        return reply(request, call("thread", args, *principal(request)), "ms")
 
     @app.delete("/api/threads/{thread_id}")
     def thread_delete(thread_id: int, request: Request) -> Response:
         check_token(request)
-        return reply(request, call("rm", {"what": "thread", "id": thread_id}, agent_of(request)))
+        return reply(request, call("rm", {"what": "thread", "id": thread_id}, *principal(request)))
 
     @app.post("/api/threads/{thread_id}/msgs")
     @app.post("/api/threads/{thread_id}/messages")
     async def thread_post(thread_id: int, request: Request) -> Response:
         check_token(request)
         body = await body_of(request)
-        return reply(request, await acall("post", {**body, "t": thread_id}, agent_of(request, body)))
+        return reply(request, await acall("post", {**body, "t": thread_id}, *principal(request, body)))
 
     # -------------------------------------------------------------- messages
 
@@ -314,30 +321,30 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
     async def message_new(request: Request) -> Response:
         check_token(request)
         body = await body_of(request)
-        return reply(request, await acall("post", body, agent_of(request, body)))
+        return reply(request, await acall("post", body, *principal(request, body)))
 
     @app.get("/api/messages/{message_id}")
     def message(message_id: int, request: Request) -> Response:
         check_token(request)
         args = qargs(request, "get")
         args["id"] = message_id
-        return reply(request, call("get", args, agent_of(request)))
+        return reply(request, call("get", args, *principal(request)))
 
     @app.delete("/api/messages/{message_id}")
     def message_delete(message_id: int, request: Request) -> Response:
         check_token(request)
-        return reply(request, call("rm", {"what": "message", "id": message_id}, agent_of(request)))
+        return reply(request, call("rm", {"what": "message", "id": message_id}, *principal(request)))
 
     @app.delete("/api/messages/{message_id}/files/{name}")
     def file_delete(message_id: int, name: str, request: Request) -> Response:
         check_token(request)
-        return reply(request, call("rm", {"what": "file", "id": message_id, "name": name}, agent_of(request)))
+        return reply(request, call("rm", {"what": "file", "id": message_id, "name": name}, *principal(request)))
 
     # ----------------------------------------------------------------- files
 
     def upload(files: list[UploadFile] | None, payload: str | None, request: Request) -> dict[str, Any]:
         check_token(request)
-        me = agent_of(request)
+        me = principal(request)[0]
         if not me:
             raise ApiError(401, "need_agent", "upload needs an agent identity", 'send header "X-Agent: <name>"')
         items: list[dict[str, Any]] = []
@@ -368,7 +375,7 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
     @app.get("/api/files/{file_id}")
     def file_meta(file_id: int, request: Request) -> Response:
         check_token(request)
-        return reply(request, call("dl", {"id": file_id, "text": request.query_params.get("text", "0")}, agent_of(request)))
+        return reply(request, call("dl", {"id": file_id, "text": request.query_params.get("text", "0")}, *principal(request)))
 
     @app.get("/api/files/{file_id}/raw")
     def file_raw(file_id: int, request: Request) -> Response:
@@ -397,7 +404,7 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
         if message_id is None:
             raise bad("?message_id=<id> is required")
         with db.session(cfg) as conn:
-            me = core.identity(conn, agent_of(request) or "")["name"]
+            me = core.identity(conn, principal(request)[0] or "")["name"]
             msg = conn.execute("SELECT * FROM messages WHERE id = ?", [message_id]).fetchone()
             if msg is None:
                 raise ApiError(404, "no_message", f"message {message_id} does not exist")
@@ -414,7 +421,7 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
     @app.get("/api/search")
     def search(request: Request) -> Response:
         check_token(request)
-        return reply(request, call("search", qargs(request, "search"), agent_of(request)))
+        return reply(request, call("search", qargs(request, "search"), *principal(request)))
 
     # ------------------------------------------------------------------ misc
 
@@ -426,7 +433,7 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
             payload = json.loads(raw) if raw.strip() else {"method": "", "id": None}
         except ValueError:
             return JSONResponse({"jsonrpc": RPC_VERSION, "error": {"code": -32700, "message": "parse error: body is not JSON"}, "id": None}, status_code=400)
-        result = await run_in_threadpool(mcp_handle, cfg, payload, agent_of(request))
+        result = await run_in_threadpool(mcp_handle, cfg, payload, *principal(request))
         if result is None:  # JSON-RPC notification
             return Response(status_code=202)
         return JSONResponse(result)

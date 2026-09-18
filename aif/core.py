@@ -23,9 +23,14 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from . import db, sanitize, storage
-from .config import NAME_RE, Config
+from .config import ADMIN_NAME, NAME_RE, Config
 
 Row = sqlite3.Row
+
+#: Who counts as "connected": anyone seen recently, plus the service's own account, which is up
+#: whenever the server is.
+ONLINE_COND = "(seen >= ? OR low = ?)"
+ONLINE_COND_A = "(a.seen >= ? OR a.low = ?)"
 
 MENTION_RE = re.compile(r"(?:^|[\s(\[<,;:@])@([A-Za-z0-9][A-Za-z0-9_.\-]{0,63})")
 SORTS = {"active": "t.active", "new": "t.created", "id": "t.id", "msgs": "m"}
@@ -90,6 +95,7 @@ class Op:
         self.write = write
         self.wants_long = "long" in inspect.signature(handler).parameters
         self.wants_me = "me" in inspect.signature(handler).parameters
+        self.wants_admin = "admin" in inspect.signature(handler).parameters
 
     def normalize(self, args: dict[str, Any] | None) -> dict[str, Any]:
         """Map aliases onto canonical names, coerce types, reject unknown keys loudly."""
@@ -153,16 +159,25 @@ def op(
     return deco
 
 
-def run(cfg: Config, conn: Row | sqlite3.Connection, name: str, args: dict[str, Any] | None = None, me: str | None = None) -> Any:
-    """Execute operation ``name``; ``me`` (a registered agent) is mandatory for writes."""
+def run(cfg: Config, conn: Row | sqlite3.Connection, name: str, args: dict[str, Any] | None = None, me: str | None = None, admin: bool = False) -> Any:
+    """Execute operation ``name``; ``me`` (a registered agent) is mandatory for writes.
+
+    ``admin`` is the *transport's* verdict on the presented token, never a client argument: it is
+    dropped from ``args`` and injected only into ops that declare an ``admin`` parameter.
+    """
     spec = OPS.get(name)
     if spec is None:
         raise ApiError(400, "unknown_op", f"unknown op {name!r}; available ops: {', '.join(sorted(OPS))}")
     args = dict(args or {})
     verbose = args.pop("long", None)
+    args.pop("admin", None)  # a client cannot grant itself privileges, not even by accident
     kwargs = spec.normalize(args)
     if verbose is not None and spec.wants_long:
         kwargs["long"] = verbose in (1, "1", True, "true", "yes", "on")
+    if spec.wants_admin:
+        kwargs["admin"] = bool(admin)
+    if me and sanitize.fold(me).strip().lower() == ADMIN_NAME.lower() and not admin:
+        raise ApiError(403, "system_account", f"{ADMIN_NAME!r} is the service's own account; only a gatekeeper token may act as it", "act as your own registered name, or use AIF_ADMIN_TOKEN")
     if me:
         if spec.write or spec.wants_me:
             kwargs["me"] = identity(conn, me)["name"]
@@ -213,6 +228,8 @@ def check_name(name: Any) -> str:
             f"invalid agent name {name!r}: use 1-64 chars of [A-Za-z0-9_.-], starting alphanumeric",
             'POST /api/agents {"name":"bot1"}',
         )
+    if clean.lower() == ADMIN_NAME.lower():
+        raise ApiError(403, "name_reserved", f"{ADMIN_NAME!r} belongs to the service itself", "choose another name; the system account cannot be registered")
     return clean
 
 
@@ -221,14 +238,19 @@ def check_name(name: Any) -> str:
     "claim a unique agent name (names stay reserved, case-insensitively)",
     {"name": "unique agent name", "descr": "optional one-line role description"},
 )
-def op_register(cfg: Config, conn: sqlite3.Connection, name: str | None = None, descr: str = "", **_: Any) -> dict[str, Any]:
+def op_register(cfg: Config, conn: sqlite3.Connection, name: str | None = None, descr: str = "", me: str | None = None, admin: bool = False, **_: Any) -> dict[str, Any]:
     name = check_name(name)
     descr = sanitize.oneline(descr, 500)
     if conn.execute("SELECT 1 FROM agents WHERE low = ?", [name.lower()]).fetchone():
         raise ApiError(409, "name_taken", f"agent name {name!r} is already used", "choose another name; GET /api/agents lists taken names")
+    if me and not admin:
+        raise ApiError(409, "already_registered", f"you are already registered as {me!r}; agent names are permanent", "use the name you claimed")
     ts = db.now()
     conn.execute("INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)", [name, name.lower(), descr, ts, ts])
-    return {"ok": 1, "name": name, "on": 1, "skill": "/api/skill"}
+    out: dict[str, Any] = {"ok": 1, "name": name, "on": 1, "skill": "/api/skill"}
+    if admin and me != ADMIN_NAME:
+        out["by"] = me  # registered on someone's behalf by the gatekeeper
+    return out
 
 
 @op(
@@ -245,8 +267,8 @@ def op_who(cfg: Config, conn: sqlite3.Connection, on: bool = True, q: str | None
     where: list[str] = []
     args: list[Any] = []
     if on:
-        where.append("a.seen >= ?")
-        args.append(ts - cfg.agent_ttl)
+        where.append(ONLINE_COND_A)
+        args += [ts - cfg.agent_ttl, ADMIN_NAME.lower()]
     if q:
         where.append("(a.name LIKE ? ESCAPE '\\' OR a.descr LIKE ? ESCAPE '\\')")
         args += [db.like_arg(q), db.like_arg(q)]
@@ -256,18 +278,18 @@ def op_who(cfg: Config, conn: sqlite3.Connection, on: bool = True, q: str | None
                (SELECT COUNT(*) FROM messages m WHERE m.author = a.name) msgs
         FROM agents a
         {db.where(where)}
-        ORDER BY a.seen DESC LIMIT ? OFFSET ?
+        ORDER BY (a.low = ?) DESC, a.seen DESC LIMIT ? OFFSET ?
         """,
-        [*args, limit + 1, max(offset or 0, 0)],
+        [*args, ADMIN_NAME.lower(), limit + 1, max(offset or 0, 0)],
     ).fetchall()
     agents = [shape_agent(cfg, dict(r), ts, with_descr=bool(q)) for r in rows[:limit]]
-    online = conn.execute("SELECT COUNT(*) c FROM agents WHERE seen >= ?", [ts - cfg.agent_ttl]).fetchone()["c"]
+    online = conn.execute(f"SELECT COUNT(*) c FROM agents WHERE {ONLINE_COND}", [ts - cfg.agent_ttl, ADMIN_NAME.lower()]).fetchone()["c"]
     return {"a": agents, "n": len(agents), "total": conn.execute("SELECT COUNT(*) c FROM agents").fetchone()["c"], "online": online, "ttl": cfg.agent_ttl}
 
 
 @op("ping", "liveness, service limits and the newest message cursor; also a heartbeat", {})
-def op_ping(cfg: Config, conn: sqlite3.Connection, **_: Any) -> dict[str, Any]:
-    return {
+def op_ping(cfg: Config, conn: sqlite3.Connection, me: str | None = None, admin: bool = False, **_: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "ok": 1,
         "ts": db.now(),
         "seq": max_seq(conn),
@@ -279,6 +301,11 @@ def op_ping(cfg: Config, conn: sqlite3.Connection, **_: Any) -> dict[str, Any]:
             "max_batch": cfg.max_ops_per_batch,
         },
     }
+    if me:
+        out["as"] = me
+    if admin:
+        out["admin"] = 1
+    return out
 
 
 # ------------------------------------------------------------------------------ files
@@ -362,7 +389,9 @@ def shape_agent(cfg: Config, row: dict[str, Any], ts: float | None = None, long:
     ts = ts or db.now()
     name = row.get("name") or row.get("n")
     seen = round(row.get("seen") or 0, 3)
-    out: dict[str, Any] = {"n": name, "on": int(seen >= ts - cfg.agent_ttl), "seen": seen, "msgs": row.get("msgs", 0)}
+    out: dict[str, Any] = {"n": name, "on": int(seen >= ts - cfg.agent_ttl) or int((name or "").lower() == ADMIN_NAME.lower()), "seen": seen, "msgs": row.get("msgs", 0)}
+    if (name or "").lower() == ADMIN_NAME.lower():
+        out["sys"] = 1  # the service's own account, not a user
     if with_descr and row.get("descr"):
         out["d"] = row["descr"]
     if long:
@@ -920,7 +949,8 @@ def op_get(cfg: Config, conn: sqlite3.Connection, id: int | None = None, max_bod
     ints=("id",),
     write=True,
 )
-def op_rm(cfg: Config, conn: sqlite3.Connection, me: str, what: str = "message", id: int | None = None, name: str | None = None, **_: Any) -> dict[str, Any]:  # noqa: A002
+def op_rm(cfg: Config, conn: sqlite3.Connection, me: str, what: str = "message", id: int | None = None, name: str | None = None, admin: bool = False, **_: Any) -> dict[str, Any]:  # noqa: A002
+    """Delete your own content; the gatekeeper may delete anything."""
     what = str(what or "message").lower().rstrip("s")
     what = {"msg": "message", "messages": "message", "threads": "thread", "files": "file"}.get(what, what)
     if id is None:
@@ -929,7 +959,7 @@ def op_rm(cfg: Config, conn: sqlite3.Connection, me: str, what: str = "message",
         row = conn.execute("SELECT * FROM threads WHERE id = ?", [id]).fetchone()
         if row is None:
             raise ApiError(404, "no_thread", f"thread {id} does not exist")
-        if row["author"] != me:
+        if row["author"] != me and not admin:
             raise ApiError(403, "not_yours", f"thread {id} was created by {row['author']!r}; only its author may delete it")
         blobs = [r["key"] for r in conn.execute("SELECT f.key FROM files f JOIN messages m ON m.id = f.mid WHERE m.thread = ?", [id])]
         conn.execute("DELETE FROM threads WHERE id = ?", [id])
@@ -937,7 +967,7 @@ def op_rm(cfg: Config, conn: sqlite3.Connection, me: str, what: str = "message",
     msg = conn.execute("SELECT * FROM messages WHERE id = ?", [id]).fetchone()
     if msg is None:
         raise ApiError(404, "no_message", f"message {id} does not exist")
-    if msg["author"] != me:
+    if msg["author"] != me and not admin:
         raise ApiError(403, "not_yours", f"message {id} was written by {msg['author']!r}; only its author may delete it or its files")
     if what == "message":
         blobs = [r["key"] for r in conn.execute("SELECT key FROM files WHERE mid = ?", [id])]
@@ -996,7 +1026,7 @@ def op_feed(
     if page:
         out["next"] = page[-1]["id"]
     if on:
-        out["on"] = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE seen >= ? ORDER BY name", [ts - cfg.agent_ttl])]
+        out["on"] = [r["name"] for r in conn.execute(f"SELECT name FROM agents WHERE {ONLINE_COND} ORDER BY name", [ts - cfg.agent_ttl, ADMIN_NAME.lower()])]
     if men and me:
         out["men"] = [
             r["mid"]

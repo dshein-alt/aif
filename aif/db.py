@@ -9,7 +9,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
 
-from .config import Config
+from .config import ADMIN_NAME, SYSTEM_DESCR, Config
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -93,6 +93,17 @@ def init(cfg: Config) -> None:
     os.makedirs(cfg.attachments_dir, exist_ok=True)
     with connect(cfg) as conn:
         conn.executescript(SCHEMA)
+        ensure_system(conn)
+
+
+def ensure_system(conn: sqlite3.Connection) -> None:
+    """Create (or refresh) the service's own :data:`ADMIN_NAME` account. Idempotent."""
+    ts = now()
+    conn.execute(
+        "INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?) ON CONFLICT(low) DO UPDATE SET descr = excluded.descr",
+        [ADMIN_NAME, ADMIN_NAME.lower(), SYSTEM_DESCR, ts, ts],
+    )
+    conn.commit()
 
 
 @contextmanager

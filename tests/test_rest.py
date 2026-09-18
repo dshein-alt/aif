@@ -16,9 +16,13 @@ from aif.config import Config
 TOKEN = "t0ken"
 
 
+ADMIN = "admin-secret"  # the fixture token below is deliberately NOT an admin token
+
+
 def make_client(tmp_path, **overrides) -> TestClient:
     cfg = Config(
         tokens=[TOKEN],
+        admin_tokens=[ADMIN],
         data_dir=str(tmp_path),
         db_path=str(tmp_path / "aif.db"),
         attachments_dir=str(tmp_path / "attachments"),
@@ -117,10 +121,11 @@ def test_who_reports_presence_and_counts(cli):
     register(cli, "two")
     cli.post("/api/threads", json={"subject": "hello", "b": "hi"}, headers=as_agent(cli, "one"))
     body = cli.get("/api/agents").json()
-    assert body["total"] == 2 and body["online"] == 2
+    assert body["total"] == 3 and body["online"] == 3  # +1: the service's own account
     one = next(a for a in body["a"] if a["n"] == "one")
     assert one["msgs"] == 1 and one["on"] == 1
-    assert cli.get("/api/online").json()["on"] == ["one", "two"]
+    assert cli.get("/api/online").json()["on"] == ["gatekeeper", "one", "two"]  # system account listed first
+    assert body["a"][0] == {"n": "gatekeeper", "on": 1, "seen": body["a"][0]["seen"], "msgs": 0, "sys": 1}
 
 
 def test_presence_expires_after_ttl(cli, tmp_path):
@@ -128,14 +133,14 @@ def test_presence_expires_after_ttl(cli, tmp_path):
 
     register(cli, "old")
     register(cli, "fresh")
-    assert cli.get("/api/agents").json()["online"] == 2
+    assert cli.get("/api/agents").json()["online"] == 3
     con = sqlite3.connect(tmp_path / "aif.db")
     con.execute("UPDATE agents SET seen = 1 WHERE low = 'old'")
     con.commit()
     body = cli.get("/api/agents").json()
-    assert body["online"] == 1 and body["a"][0]["n"] == "fresh"
-    assert cli.get("/api/online").json()["on"] == ["fresh"]
-    assert {a["n"] for a in cli.get("/api/agents?on=0").json()["a"]} == {"old", "fresh"}
+    assert body["online"] == 2 and [a["n"] for a in body["a"]] == ["gatekeeper", "fresh"]  # gatekeeper never expires
+    assert cli.get("/api/online").json()["on"] == ["gatekeeper", "fresh"]
+    assert {a["n"] for a in cli.get("/api/agents?on=0").json()["a"]} == {"old", "fresh", "gatekeeper"}
     assert cli.get("/api/agents?q=fresh&on=0").json()["a"][0]["n"] == "fresh"
 
 
@@ -271,7 +276,7 @@ def test_feed_is_delta_and_points_at_my_mentions(cli):
     register(cli, "a1")
     register(cli, "a2")
     first = cli.get("/api/feed?since=0").json()
-    assert first["seq"] == 0 and first["on"] == ["a1", "a2"]
+    assert first["seq"] == 0 and first["on"] == ["a1", "a2", "gatekeeper"]  # the system account is always up
     tid = cli.post("/api/threads", json={"subject": "t", "b": "hello @a2"}, headers=as_agent(cli, "a1")).json()["t"]
     cli.post(f"/api/threads/{tid}/msgs", json={"b": "noise"}, headers=as_agent(cli, "a2"))
     a2 = cli.get("/api/feed?since=0", headers=as_agent(cli, "a2")).json()

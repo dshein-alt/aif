@@ -20,7 +20,7 @@ TOKEN = "t0ken"
 
 @pytest.fixture()
 def cli(tmp_path):
-    client = TestClient(create_app(Config(tokens=[TOKEN], data_dir=str(tmp_path)), mount_ui=True))
+    client = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], data_dir=str(tmp_path)), mount_ui=True))
     client.headers["authorization"] = f"Bearer {TOKEN}"
     client.post("/api/agents", json={"name": "alice", "descr": "first"})
     client.post("/api/agents", json={"name": "bob"})
@@ -62,7 +62,7 @@ def test_mcp_tools_mirror_the_ops(cli):
 
 def test_mcp_tool_call_read_and_write(cli):
     out = rpc(cli, "tools/call", {"name": "who", "arguments": {}}).json()["result"]
-    assert out["isError"] is False and {a["n"] for a in out["structuredContent"]["a"]} == {"alice", "bob"}
+    assert out["isError"] is False and {a["n"] for a in out["structuredContent"]["a"]} == {"alice", "bob", "gatekeeper"}
     made = rpc(cli, "tools/call", {"name": "post", "arguments": {"agent": "alice", "subject": "from mcp", "b": "hi @bob"}}, headers={"x-agent": "alice"}).json()["result"]
     assert made["isError"] is False and made["structuredContent"]["ok"] == 1
     assert rpc(cli, "tools/call", {"name": "threads", "arguments": {}}).json()["result"]["isError"] is False
@@ -125,7 +125,7 @@ def test_mcp_instructions_match_the_card():
 
 
 def test_ui_requires_the_token(tmp_path):
-    anon = TestClient(create_app(Config(tokens=[TOKEN], data_dir=str(tmp_path)), mount_ui=True))
+    anon = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], data_dir=str(tmp_path)), mount_ui=True))
     assert anon.get("/ui").status_code == 401
     assert "Access token required" in anon.get("/ui").text
     assert anon.get("/ui?token=nope").status_code == 403
@@ -134,7 +134,7 @@ def test_ui_requires_the_token(tmp_path):
 
 
 def test_ui_lists_threads_and_links_with_token(tmp_path):
-    client = TestClient(create_app(Config(tokens=[TOKEN], data_dir=str(tmp_path)), mount_ui=True))
+    client = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], data_dir=str(tmp_path)), mount_ui=True))
     client.headers["authorization"] = f"Bearer {TOKEN}"
     client.post("/api/agents", json={"name": "alice"})
     client.post("/api/threads", json={"subject": "Quarterly plans", "b": "hello"}, headers={"x-agent": "alice"})
@@ -192,7 +192,7 @@ def test_root_redirects_browsers_to_the_ui(cli):
 
 
 def test_ui_can_be_switched_off(tmp_path):
-    cfg = Config(tokens=[TOKEN], data_dir=str(tmp_path / "uioff"))
+    cfg = Config(tokens=[TOKEN], admin_tokens=["admin-secret"], data_dir=str(tmp_path / "uioff"))
     client = TestClient(create_app(cfg, mount_ui=False))
     client.headers["authorization"] = f"Bearer {TOKEN}"
     assert client.get("/ui?token=t0ken").status_code == 404
@@ -234,7 +234,7 @@ def test_cli_init_stats(tmp_path):
     assert (tmp_path / "cli" / "aif.db").exists() and (tmp_path / "cli" / "attachments").is_dir()
     stats = run_cli("stats", "--data-dir", str(tmp_path / "cli"))
     assert stats.returncode == 0, stats.stderr
-    assert re.search(r"agents=0", stats.stdout) and "db_bytes=" in stats.stdout
+    assert re.search(r"agents=1", stats.stdout) and "db_bytes=" in stats.stdout  # 1 = the seeded system account
 
 
 def test_cli_refuses_insecure_default_token(tmp_path):

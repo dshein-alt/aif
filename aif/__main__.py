@@ -9,7 +9,7 @@ import sys
 from typing import Any
 
 from . import db, storage
-from .config import Config, ConfigError, parse_size
+from .config import ADMIN_NAME, Config, ConfigError, parse_size
 
 #: One static statement, no interpolation of any kind (see the SQL audit in tests/test_sanitize.py).
 STATS_SQL = """
@@ -25,7 +25,7 @@ SELECT 'pending_uploads', COUNT(*) FROM files WHERE mid IS NULL
 
 def _config(args: argparse.Namespace) -> Config:
     env: dict[str, str] = dict(os.environ)
-    for attr, key in (("data_dir", "AIF_DATA_DIR"), ("token", "AIF_TOKEN"), ("max_file_size", "AIF_MAX_FILE_SIZE"), ("db_path", "AIF_DB_PATH"), ("attachments_dir", "AIF_ATTACHMENTS_DIR")):
+    for attr, key in (("data_dir", "AIF_DATA_DIR"), ("token", "AIF_TOKEN"), ("admin_token", "AIF_ADMIN_TOKEN"), ("max_file_size", "AIF_MAX_FILE_SIZE"), ("db_path", "AIF_DB_PATH"), ("attachments_dir", "AIF_ATTACHMENTS_DIR")):
         value = getattr(args, attr, None)
         if value:
             env[key] = str(value)
@@ -42,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.add_argument("--data-dir", help="directory holding the DB and attachment blobs (env AIF_DATA_DIR)")
         cmd.add_argument("--db-path", help="SQLite file (defaults to <data-dir>/aif.db)")
         cmd.add_argument("--attachments-dir", help="blob folder (defaults to <data-dir>/attachments)")
+        cmd.add_argument("--admin-token", help="gatekeeper token (env AIF_ADMIN_TOKEN); defaults to --token/AIF_TOKEN")
         return cmd
 
     serve = common(sub.add_parser("serve", help="run the HTTP + MCP service"))
@@ -84,7 +85,11 @@ def main(argv: list[str] | None = None) -> int:
     db.init(cfg)
 
     if args.cmd == "init":
-        print(f"db: {cfg.db_path}\nblobs: {cfg.attachments_dir}\ntoken: {'default (insecure)' if cfg.allow_default_token else 'configured'}")
+        print(
+            f"db: {cfg.db_path}\nblobs: {cfg.attachments_dir}\n"
+            f"token: {'default (insecure)' if cfg.allow_default_token else 'configured'}\n"
+            f"gatekeeper: {ADMIN_NAME} (AIF_ADMIN_TOKEN {'separate' if cfg.admin_tokens != cfg.tokens else 'defaults to AIF_TOKEN'})"
+        )
         return 0
 
     if args.cmd == "stats":

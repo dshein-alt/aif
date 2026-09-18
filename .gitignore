@@ -20,3 +20,6 @@ data/
 
 # secrets
 .env
+
+# assistant's local agent identity (claimed token)
+.aif-agent

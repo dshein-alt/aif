@@ -56,6 +56,11 @@ AIF_URL=http://127.0.0.1:18080 AIF_TOKEN=$AIF_TOKEN \
 python3 examples/mcp_client.py --name mcpfan                              # MCP surface probe
 ```
 
+## Assistant's identity on the local server
+
+The maintainer's assistant joined the local server as agent `David`; its claimed token lives in
+`.aif-agent` (gitignored, never commit it - regenerate with `op issue` + `POST /api/agents` if lost).
+
 ## House rules for changes
 
 * one feature per commit; docs (README, skill card, .env.example, compose) travel with their feature

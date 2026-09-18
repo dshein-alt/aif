@@ -1,12 +1,16 @@
 services:
   aif:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
     image: aif:local
     container_name: aif
     ports:
+      # the only externally published port; Postgres is never published (see postgres + backend network)
       - "${AIF_PORT:-18080}:18080"
     environment:
-      # Required: the shared bearer token every agent (and /ui) must send.
+      # Required: the shared bearer token every agent (and the API) must send.
       AIF_TOKEN: "${AIF_TOKEN:?refusing to start without AIF_TOKEN - generate one with: aif token}"
       AIF_TOKEN_SALT: "${AIF_TOKEN_SALT:?refusing to start without AIF_TOKEN_SALT - generate one with: aif token}"
       # Explicit alias of AIF_TOKEN (wins when both are set).
@@ -27,20 +31,57 @@ services:
       AIF_UI_SESSION_TTL: ${AIF_UI_SESSION_TTL:-43200}
       AIF_UI_REFRESH: ${AIF_UI_REFRESH:-120}
       AIF_SEED: ${AIF_SEED:-1}
-      AIF_ASSETS_DIR: ${AIF_ASSETS_DIR:-}
+      AIF_ASSETS_DIR: ${AIF_ASSETS_DIR:-/app/assets}
       # Throwaway local runs only: accept the built-in insecure dev token+salt.
       AIF_ALLOW_DEFAULT_TOKEN: ${AIF_ALLOW_DEFAULT_TOKEN:-}
-      # AIF_DATA_DIR / AIF_DB_PATH / AIF_ATTACHMENTS_DIR are intentionally fixed to /data (the volume).
-      # AIF_HOST stays 0.0.0.0 inside the container; publish ports instead.
       AIF_LOG_LEVEL: ${AIF_LOG_LEVEL:-info}
+      # Postgres, reachable only over the internal backend network (host "postgres"). Never published.
+      AIF_PG_URL: "postgres://aif:${AIF_PG_PASSWORD:?refusing to start without AIF_PG_PASSWORD}@postgres:5432/aif?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - aif-data:/data
     restart: unless-stopped
+    networks:
+      - frontend   # published here (only network the host can reach the app on)
+      - backend    # internal; reaches Postgres as "postgres"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:18080/healthz').read()"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:18080/healthz"]
       interval: 30s
       timeout: 3s
       start_period: 5s
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: aif-postgres
+    # NOTE: no `ports:` block on purpose. Postgres is reachable only from the aif service over the
+    # internal backend network and is never bound on the host.
+    environment:
+      POSTGRES_DB: aif
+      POSTGRES_USER: aif
+      POSTGRES_PASSWORD: "${AIF_PG_PASSWORD:?refusing to start without AIF_PG_PASSWORD}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - backend    # internal only: Postgres is never on frontend and publishes no port
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aif -d aif"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+networks:
+  # frontend is an ordinary bridge: only the app is attached and its port is published here, so the
+  # host/LAN can reach the HTTP API. Postgres is NOT on this network.
+  frontend:
+    driver: bridge
+  # backend is internal: no gateway/NAT, so nothing here can reach (or be reached from) the outside
+  # world. It only carries app<->Postgres traffic; Postgres lives here and nowhere else.
+  backend:
+    internal: true
+
 volumes:
   aif-data:
+  pgdata:

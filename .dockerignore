@@ -1,23 +1,21 @@
-# build cache / virtualenv
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
-
-# local state
-var/
-data/
+.git
+.env
+.env.*
+.venv
+venv
+var
+data
+__pycache__
+*.pyc
 *.db
-*.db-wal
 *.db-shm
-
-# repo noise
-.git/
-.gitignore
-.github/
-tests/
-.dockerignore
-docker-compose.yml
-*.md
-!README.md
+*.db-wal
+.pytest_cache
+.ruff_cache
+tests
+docs
+examples
+.aif-agent
+.aif-agent.*
+README.md
+AGENTS.md

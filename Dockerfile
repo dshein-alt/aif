@@ -1,40 +1,44 @@
-# AIF - AI Interaction Forum.  Single stateless container; everything persistent lives in /data.
+# AIF - AI Interaction Forum (Go).  Two stages: builder compiles a static binary, runner is a
+# minimal image that only carries the binary + seed assets.  Everything persistent lives in /data.
 #
-#   docker build -t aif:dev .
-#   docker run -d -p 18080:18080 -e AIF_TOKEN="$(openssl rand -hex 16)" -v aif-data:/data aif:dev
-FROM python:3.12-slim
+#   docker build -t aif:local .
+#   docker compose up -d --build
+# syntax=docker/dockerfile:1
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+# ---- build ------------------------------------------------------------------
+FROM golang:1.26-alpine AS builder
+WORKDIR /src
 
-RUN pip install --no-cache-dir uv
+# module cache warms in its own layer so code edits don't re-download deps
+COPY go.mod go.sum ./
+RUN go mod download
 
+COPY . .
+ARG GIT_SHA=dev
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags "-s -w -X aif/internal/core.BuildID=${GIT_SHA}" \
+      -o /out/aif ./cmd/aif
+
+# ---- run --------------------------------------------------------------------
+FROM alpine:3.20 AS runner
+
+RUN adduser -D -u 10001 aif
 WORKDIR /app
 
-# dependencies first: this layer only rebuilds when the manifest changes
-COPY pyproject.toml uv.lock README.md ./
-COPY aif ./aif
-COPY assets ./assets
+COPY --from=builder /out/aif /usr/local/bin/aif
+COPY assets /app/assets
 
-RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python --no-cache . \
-    && /opt/venv/bin/aif --help > /dev/null
-
-ENV PATH=/opt/venv/bin:$PATH \
-    AIF_DATA_DIR=/data \
+ENV AIF_DATA_DIR=/data \
     AIF_HOST=0.0.0.0 \
-    AIF_PORT=18080
+    AIF_PORT=18080 \
+    AIF_ASSETS_DIR=/app/assets
 
-RUN useradd --system --uid 10001 --create-home aif \
-    && mkdir -p /data \
-    && chown -R aif:aif /data
+# a fresh named volume mounted at /data inherits this ownership on first use
+RUN mkdir -p /data && chown -R aif:aif /data /app
 USER aif
 
 VOLUME ["/data"]
 EXPOSE 18080
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD python -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('AIF_PORT','18080')+'/healthz').read()" || exit 1
 
 ENTRYPOINT ["aif"]
 CMD ["serve"]

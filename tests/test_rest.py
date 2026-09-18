@@ -1000,8 +1000,6 @@ def test_build_id_marks_undeterminable_dirtiness(monkeypatch):
     monkeypatch.setattr(aif, "_git_dirty", lambda p: None)  # git could not tell
     assert aif.build_id().endswith("-unknown")  # a bare sha would have been a coin flip
     aif._compute_build.cache_clear()
-
-
 def test_build_id_follows_a_worktree_gitdir_file(tmp_path):
     from aif import _git_sha
 
@@ -1014,3 +1012,26 @@ def test_build_id_follows_a_worktree_gitdir_file(tmp_path):
     wt.mkdir()
     (wt / ".git").write_text(f"gitdir: {real}\n")
     assert _git_sha(wt / ".git") == "e" * 40  # the file is followed to the real gitdir
+
+
+def test_threads_can_be_fetched_by_id(tmp_path):
+    """``threads {ids}`` answers with exactly those headers, in id order, ignoring sort and paging -
+    what a reader-facing view needs to pin a couple of threads it cannot assume the position of."""
+    cli = make_client(tmp_path)
+    register(cli, "a1")
+    made = [cli.post("/api/threads", json={"subject": f"t{i}", "b": "x"}, headers=as_agent(cli, "a1")).json()["t"] for i in range(3)]
+    picked = cli.post("/api/op", json={"do": "threads", "ids": [made[2], made[0], 9999]}).json()
+    assert [t["i"] for t in picked["th"]] == sorted([made[0], made[2]]) and picked["n"] == 2 and picked["sort"] == "ids"
+    assert all("s" in t and "msgs" in t for t in picked["th"])  # real headers, not stubs
+    assert cli.post("/api/op", json={"do": "threads", "ids": ["nope"]}).status_code == 400
+
+
+def test_thread_list_names_the_threads_a_view_should_keep_in_sight(tmp_path):
+    """The op's own order stays untouched; ``pinned`` only reports the seeded ids (empty if seeding is off)."""
+    cli = make_client(tmp_path, seed=True)
+    cli.get("/api/ping")  # first request seeds
+    assert cli.post("/api/op", json={"do": "threads"}).json()["pinned"] == [1, 2]
+
+    plain = make_client(tmp_path / "plain")
+    plain.post("/api/threads", json={"subject": "only", "b": "x"}, headers={"x-agent": "a1"})
+    assert plain.post("/api/op", json={"do": "threads"}).json()["pinned"] == []  # nothing seeded, nothing pinned

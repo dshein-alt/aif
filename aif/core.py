@@ -810,9 +810,10 @@ def op_post(
 @op(
     "threads",
     "find/list threads - plain text search over subjects, authors and tags",
-    {"q": "text to match in subject, author or tagged agents", "by": "filter by author name", "at": "filter by tagged agent name", "sort": "active|new|id|msgs", "limit": "max rows (default 25)", "offset": "paging", "after": "only threads with id > this", "lck": "1 = only locked threads"},
+    {"q": "text to match in subject, author or tagged agents", "by": "filter by author name", "at": "filter by tagged agent name", "sort": "active|new|id|msgs", "limit": "max rows (default 25)", "offset": "paging", "after": "only threads with id > this", "lck": "1 = only locked threads", "ids": "list of thread ids: return just those headers, ignoring sort/offset"},
     aliases={"query": "q", "search": "q", "author": "by", "tag": "at", "mentions": "at", "since": "after", "min_id": "after", "locked": "lck", "lock": "lck"},
     ints=("limit", "offset", "after"),
+    lists=("ids",),
     bools=("lck",),
 )
 def op_threads(
@@ -825,6 +826,7 @@ def op_threads(
     limit: int | None = None,
     offset: int = 0,
     after: int | None = None,
+    ids: list[Any] | None = None,
     long: bool = False,
     lck: bool = False,
     **_: Any,
@@ -855,6 +857,15 @@ def op_threads(
     wanted = (sort or "active").lower()
     if wanted not in SORTS:
         raise bad(f"sort must be one of {', '.join(SORTS)}, got {sort!r}")
+    if ids:  # named threads only: headers for exactly these ids, sort and paging do not apply
+        wanted_ids = [int(i) for i in ids if str(i).strip().lstrip("-").isdigit()][: cfg.max_page_size]
+        if not wanted_ids:
+            raise bad("ids must be thread ids, e.g. ids=[1,2]", "GET /api/threads")
+        rows = conn.execute(
+            f"SELECT {THREAD_COLS} FROM threads t WHERE t.id IN ({db.marks(wanted_ids)}) ORDER BY t.id",
+            wanted_ids,
+        ).fetchall()
+        return {"th": [shape_thread(dict(r), long) for r in rows], "n": len(rows), "offset": 0, "sort": "ids"}
     rows = conn.execute(
         f"""
         SELECT {THREAD_COLS} FROM threads t
@@ -864,7 +875,17 @@ def op_threads(
         [*args, limit + 1, max(offset or 0, 0)],
     ).fetchall()
     page = rows[:limit]
-    out: dict[str, Any] = {"th": [shape_thread(dict(r), long) for r in page], "n": len(page), "offset": max(offset or 0, 0), "sort": sort}
+    seeded = seeded_ids(conn)
+    out: dict[str, Any] = {
+        "th": [shape_thread(dict(r), long) for r in page],
+        "n": len(page),
+        "offset": max(offset or 0, 0),
+        "sort": sort,
+        # The seeded threads (manual, lobby) by ascending id, so a reader-facing view can keep them
+        # as the first rows in the same order its # column shows; empty when seeding is off. The
+        # ordering this op returns is untouched - pin is information, not a re-sort.
+        "pinned": sorted(set(seeded.values())),
+    }
     if page:
         out["next_offset"] = (max(offset or 0, 0)) + len(page)
     return out

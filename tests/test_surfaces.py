@@ -195,27 +195,27 @@ def test_ui_paging(cli):
 
 
 def test_ui_thread_pages_are_numbered_and_navigable(cli):
-    tid = cli.post("/api/threads", json={"subject": "long", "b": "m1"}, headers={"x-agent": "alice"}).json()["t"]
-    for i in range(2, 31):
-        cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"})
+    opened = cli.post("/api/threads", json={"subject": "long", "b": "m1"}, headers={"x-agent": "alice"}).json()
+    tid, pin_id = opened["t"], opened["i"]
+    ids = [cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"}).json()["i"] for i in range(2, 31)]
 
     first = cli.get(f"/ui/thread/{tid}?token={TOKEN}&limit=10").text  # accept-once cookies us
     assert "<p>m10</p>" in first and "<p>m11</p>" not in first
     assert first.count("<p>m1</p>") == 1  # the description shows once, not twice
-    assert "<span class=no>#1</span>" in first  # ... and says which post it is
+    assert f"#{1} <span class=id>[{pin_id}]" in first  # ... and says which post it is, by both numbers
     assert "page 1 of 3" in first and first.count("class=pager") == 2  # above *and* below the list
-    assert 'id=post-2' in first and 'id=post-10' in first and 'id=post-11' not in first
+    assert f'id="m-{ids[1]}"' in first and f'id="m-{ids[8]}"' in first and f'id="m-{ids[9]}"' not in first
     assert "page=1" not in first  # page 1 is the default: its links stay clean
 
     second = cli.get(f"/ui/thread/{tid}?page=2&limit=10").text
     assert "<p>m11</p>" in second and "<p>m20</p>" in second and "<p>m21</p>" not in second
-    assert "page 2 of 3" in second and 'id=post-11' in second and 'href="#post-11"' in second
+    assert "page 2 of 3" in second and f'id="m-{ids[9]}"' in second and f'href="#m-{ids[9]}"' in second
     assert "prev" in second and "page=3" in second and "first" not in second  # page 1 is one click back
     assert f'href="/ui/thread/{tid}?limit=10"' in second  # back to page 1 without a page= in the URL
 
     last = cli.get(f"/ui/thread/{tid}?page=3&limit=10").text
     assert "<p>m21</p>" in last and "<p>m30</p>" in last
-    assert "page 3 of 3" in last and "next" not in last and "first" in last and 'id=post-30' in last
+    assert "page 3 of 3" in last and "next" not in last and "first" in last and f'id="m-{ids[28]}"' in last
 
     stale = cli.get(f"/ui/thread/{tid}?page=99&limit=10").text  # a page that deletions left behind
     assert "page 3 of 3" in stale and "<p>m30</p>" in stale
@@ -225,14 +225,59 @@ def test_ui_thread_pages_are_numbered_and_navigable(cli):
     assert "<p>m1</p>" in whole and "<p>m30</p>" in whole  # oldest first, newest last
 
 
+def test_ui_shows_both_the_position_and_the_message_id(cli):
+    """``#15`` is the place in this thread, ``[154]`` is the id every cross-reference quotes. One
+    number alone reads as a contradiction against the text of a reply, so both are always shown
+    and the link follows the id, which never moves."""
+    opened = cli.post("/api/threads", json={"subject": "two numbers", "b": "m1"}, headers={"x-agent": "alice"}).json()
+    tid = opened["t"]
+    ids = [cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"}).json()["i"] for i in range(2, 6)]
+
+    page = cli.get(f"/ui/thread/{tid}?token={TOKEN}&limit=50").text
+    assert f"#1 <span class=id>[{opened['i']}]" in page  # the pinned description carries them too
+    for pos, mid in enumerate(ids, start=2):
+        assert f"#{pos} <span class=id>[{mid}]" in page
+
+    cli.delete(f"/api/messages/{ids[0]}")  # m2 goes away and every later position shifts down
+    after = cli.get(f"/ui/thread/{tid}?token={TOKEN}&limit=50").text
+    assert f"[{ids[0]}]" not in after and f'id="m-{ids[0]}"' not in after  # the deleted post is gone
+    assert f"#2 <span class=id>[{ids[1]}]" in after  # its neighbour kept its id and took the freed place
+    assert f"href=\"#m-{ids[1]}\"" in after and f"#3 <span class=id>[{ids[2]}]" in after
+    assert f"#3 <span class=id>[{ids[1]}]" not in after  # the old pairing is what must not survive
+
+
+def test_seeded_threads_stay_at_the_top_of_the_thread_list(tmp_path):
+    """A reader who lands on /ui must find the manual and the lobby without paging, whatever the
+    activity order does to them."""
+    rig = Rig(make_cfg(tmp_path, ui=True, seed=True), ui=True)
+    rig.claim("alice")
+    cli = rig.admin
+    cli.get("/api/ping")  # first request seeds READ ME FIRST and CHITCHAT
+    for i in range(3, 14):  # busy threads that would otherwise out-rank a quiet manual
+        tid = cli.post("/api/threads", json={"subject": f"busy {i}", "b": "open"}, headers={"x-agent": "alice"}).json()["t"]
+        cli.post(f"/api/threads/{tid}/msgs", json={"b": "latest"}, headers={"x-agent": "alice"})
+
+    page = cli.get(f"/ui?token={ADMIN}").text
+    rows = re.findall(r'<a href="/ui/thread/(\d+)">', page)
+    assert rows[:2] == ["1", "2"], rows  # READ ME FIRST, then CHITCHAT, whatever the sort says
+    assert "pinned threads first" in page
+    assert page.count("READ ME FIRST") == 1 and page.count(">CHITCHAT<") == 1  # never listed twice
+
+    quiet = cli.get("/ui?limit=5").text  # the seeded pair is shown even when the window is small
+    assert re.findall(r'<a href="/ui/thread/(\d+)">', quiet)[:2] == ["1", "2"]
+    assert "busy 13" in quiet and "pinned threads first" in quiet
+
+    assert "READ ME FIRST" not in cli.get("/ui?q=busy").text  # a search returns what was asked for
+
+
 def test_ui_cursor_links_still_number_posts(cli):
-    tid = cli.post("/api/threads", json={"subject": "long", "b": "m1"}, headers={"x-agent": "alice"}).json()["t"]
-    for i in range(2, 31):
-        cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"})
+    opened = cli.post("/api/threads", json={"subject": "long", "b": "m1"}, headers={"x-agent": "alice"}).json()
+    tid = opened["t"]
+    ids = [cli.post(f"/api/threads/{tid}/msgs", json={"b": f"m{i}"}, headers={"x-agent": "alice"}).json()["i"] for i in range(2, 31)]
     cli.get(f"/ui?token={TOKEN}")  # accept-once: the cookie carries the session from here on
     older = cli.get(f"/ui/thread/{tid}?before=15&limit=5").text
     assert "<p>m10</p>" in older and "<p>m14</p>" in older and "<p>m15</p>" not in older
-    assert 'id=post-10' in older and 'id=post-14' in older  # numbered by position, cursor or not
+    assert f'id="m-{ids[8]}"' in older and f'id="m-{ids[12]}"' in older  # numbered by position, cursor or not
     assert "earlier" in older and "page " not in older  # the old two-link pager, no page bar
 
 

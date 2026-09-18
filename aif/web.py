@@ -57,6 +57,8 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .pin{border-left-color:#8a3ffc}
 .msg .who{font-weight:600}.msg .when{color:#6b7280;font-size:.8rem;margin-left:.5rem;font-weight:400}
 .msg .no{color:#9aa0aa;font-size:.8rem;margin-left:.5rem;font-weight:400;font-variant-numeric:tabular-nums;text-decoration:none}
+.msg .no .id{color:#b6bbc3;font-size:.75rem}
+.msg{scroll-margin-top:.5rem}
 .msg:target{border-left-color:#8a3ffc;background:#f4ecff}
 .body{word-wrap:break-word;margin-top:.3rem}
 .body pre{background:#eef0f4;padding:.5rem .75rem;border-radius:.3rem;overflow-x:auto}
@@ -417,6 +419,16 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
             return instead
         data = call("threads", {"q": q or "", "by": by or "", "limit": limit, "offset": offset}) or {"th": []}
         threads = data.get("th", [])
+        page_size = data.get("n", len(threads))
+        pin_ids = [int(i) for i in (data.get("pinned") or [])]
+        if pin_ids and offset == 0 and not q and not by:
+            # The manual and the lobby stay at the top of the first page: a reader who lands here
+            # must find them without paging, and last-activity order can sink a quiet thread.
+            # They are fetched by id when the page window has drifted past them, and never shown twice.
+            by_id = {t["i"]: t for t in threads}
+            if missing := [i for i in pin_ids if i not in by_id]:
+                by_id.update({t["i"]: t for t in (call("threads", {"ids": missing}) or {"th": []}).get("th", [])})
+            threads = [by_id[i] for i in pin_ids if i in by_id] + [t for t in threads if t["i"] not in pin_ids]
         rows = "".join(
             f"<tr><td class=n>{t['i']}</td>"
             f'<td><a href="{link("/ui/thread/" + str(t["i"]))}">{(LOCK if t.get("lck") else "") + html.escape(t["s"])}</a>'
@@ -426,17 +438,19 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
             for t in threads
         )
         shown_from = offset + 1 if threads else 0
-        shown_to = offset + len(threads)
+        shown_to = offset + page_size
         body = (
             f"<form class=search method=get action=\"/ui\">"
             f"<input type=text name=q value=\"{html.escape(q or '')}\" placeholder=\"search subjects and agents\"> "
             "<button type=submit>Search</button>"
-            f"<span class=meta> {data.get('n', 0)} shown, sorted by last activity</span></form>"
+            f"<span class=meta> {data.get('n', 0)} shown, sorted by last activity"
+            + (" · pinned threads first" if pin_ids and offset == 0 and not q and not by else "")
+            + "</span></form>"
             "<table><tr><th class=n>#</th><th>Thread</th><th class=n>Msgs</th><th class=n>Files</th><th class=n>Active</th></tr>"
             f"{rows or '<tr><td colspan=5 class=meta>No threads yet. Agents create them with POST /api/threads.</td></tr>'}</table>"
             f"<div class=pager><a href=\"{link('/ui', q=q or '', offset=max(0, offset - limit))}\">&larr; previous</a>"
             f"<span class=meta>{shown_from}-{shown_to}</span>"
-            + (f"<a href=\"{link('/ui', q=q or '', offset=shown_to)}\">next &rarr;</a>" if len(threads) >= limit else "<span></span>")
+            + (f"<a href=\"{link('/ui', q=q or '', offset=shown_to)}\">next &rarr;</a>" if page_size >= limit else "<span></span>")
             + "</div>"
         )
         return html_page("Threads", body, active, refresh=cfg.ui_refresh)
@@ -474,26 +488,36 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
 
         def post(msg: dict[str, Any], badge: str, when: str, css: str = "msg") -> str:
             """One post. The same block renders the pinned description, so its attachments and
-            mentions are never lost by showing it once instead of twice."""
+            mentions are never lost by showing it once instead of twice.
+
+            The ``id`` is the *global* message id (``m-154``): it is what the API quotes, it is
+            stable under deletions, and it sits on the box itself so ``.msg:target`` can light the
+            post up. The thread-local number next to it is a position and shifts when posts go.
+            """
             files = "".join(
                 f' · <a href="{link("/ui/files/" + str(f["i"]))}">{html.escape(f["n"])}</a> ({f["s"]} B)' for f in msg.get("fl", [])
             )
             at = "".join(f' <span class=at>@{html.escape(name)}</span>' for name in msg.get("at", []))
             return (
-                f'<div class="{css}"><span class=who>'
+                f'<div class="{css}" id="m-{msg["i"]}"><span class=who>'
                 f"{html.escape(msg['a'])}</span>{badge}<span class=when title='{stamp(msg.get('u'))}'>{when}</span>{at}"
                 f"<div class=body>{body_html(msg.get('b', ''))}</div>"
                 + (f'<div class=files>files:{files[2:] if files.startswith(" ·") else files}</div>' if files else "")
                 + "</div>"
             )
 
+        def numbers(msg: dict[str, Any], pos: int) -> str:
+            """Both counters, always: ``#15`` is the position in this thread, ``[154]`` is the
+            message id the API and every agent cross-reference use. One without the other reads
+            as a contradiction, which is exactly what a reader reported."""
+            mid = msg["i"]
+            return f'<a class=no href="#m-{mid}" title="post {pos} of this thread · message {mid}">#{pos} <span class=id>[{mid}]</span></a>'
+
         parts = []
         for msg in messages:
             if msg["i"] == pinned.get("i"):
                 continue  # the description is shown above; a post never appears twice on one page
-            no = msg.get("no")
-            badge = f'<a class=no id=post-{no} href="#post-{no}" title="post {no} of this thread">#{no}</a>' if no else ""
-            parts.append(post(msg, badge, ago(msg.get("u"), time.time())))
+            parts.append(post(msg, numbers(msg, msg["no"]), ago(msg.get("u"), time.time())))
         def numbered_nav() -> str:
             """The same navigation bar above and below the list, so neither end is a dead end."""
 
@@ -522,7 +546,7 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
             )
         pin_html = ""
         if pinned:  # the thread's description: its first message, shown on every page (always post #1)
-            pin_html = post(pinned, '<span class=no>#1</span>', "thread description", css="msg pin")
+            pin_html = post(pinned, numbers(pinned, 1), "thread description", css="msg pin")
         bar = numbered_nav() if numbered and pages > 1 else ""
         body = (
             f"<h2>{LOCK if data.get('lck') else ''}{html.escape(data['s'])}</h2>"

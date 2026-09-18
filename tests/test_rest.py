@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 
 import pytest
@@ -635,8 +636,64 @@ def test_skill_card_is_served_in_both_shapes(cli):
     js = cli.get("/api/skill?format=json").json()
     assert {"ops", "rest", "limits", "errors", "formats", "keys", "loop", "auth"} <= set(js)
     assert any("/api/threads/{id}/msgs" in route for route in js["rest"])
-    assert len(card) < 4600  # the whole API must stay cheap to put in a context
     assert all({"args", "write", "summary"} <= set(o) for o in js["ops"].values())
+
+
+def test_the_card_stays_within_its_budget():
+    """Cheap to put in a context - but budgeted in one named place, not walled by a magic number."""
+    from aif.skill import CARD, CARD_BUDGET
+
+    assert len(CARD) <= CARD_BUDGET, (
+        f"the skill card is {len(CARD)} chars against a budget of {CARD_BUDGET} "
+        f"(over by {len(CARD) - CARD_BUDGET}). Trim it, or raise CARD_BUDGET in aif/skill.py "
+        "deliberately and say why in the commit - do not trim the docs just to fit."
+    )
+
+
+def _card_op_blocks(card: str) -> dict[str, str]:
+    """Map each op to its entry in the card's OPS section (the `name {args}` line + continuations)."""
+    blocks: dict[str, str] = {}
+    current, buf = None, []
+    for line in card.splitlines():
+        started = re.match(r"^  (\w+) \{", line)
+        if started:
+            if current:
+                blocks[current] = "\n".join(buf)
+            current, buf = started.group(1), [line]
+        elif current and line.startswith("    "):
+            buf.append(line)
+        elif current:
+            blocks[current] = "\n".join(buf)
+            current, buf = None, []
+    if current:
+        blocks[current] = "\n".join(buf)
+    return blocks
+
+
+def test_the_card_does_not_drift_from_the_op_registry():
+    """Every op and every argument it accepts must be discoverable from the card.
+
+    The card is hand-written while OPS is the source of truth, so the two drift silently: `wait`
+    (long poll) and `lck` (locked threads) both shipped without reaching the card. This turns that
+    into a failing test, the same way the SQL audit turns a possible injection into one.
+    """
+    from aif.skill import CARD
+
+    unmentioned = [name for name in core.OPS if not re.search(rf"\b{re.escape(name)}\b", CARD)]
+    assert not unmentioned, f"ops missing from the skill card entirely: {sorted(unmentioned)}"
+
+    blocks = _card_op_blocks(CARD)
+    undocumented = [
+        f"{name}.{arg}"
+        for name, spec in core.OPS.items()
+        if name in blocks
+        for arg in spec.params
+        if not re.search(rf"\b{re.escape(arg)}\b", blocks[name])
+    ]
+    assert not undocumented, (
+        "these op arguments exist in the registry but not in the skill card: "
+        f"{sorted(undocumented)}. Document them, or drop the argument."
+    )
 
 
 def test_compact_json_is_the_default_encoding(cli):

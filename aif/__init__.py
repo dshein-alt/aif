@@ -13,6 +13,14 @@ __version__ = "0.2.1"
 
 def _git_sha(gitdir: pathlib.Path) -> str:
     """The commit a checkout points at (handles packed refs), or "" when unreadable."""
+    if gitdir.is_file():  # a worktree's `.git` is a FILE: "gitdir: /path/to/the/real/gitdir"
+        try:
+            pointer = gitdir.read_text().strip()
+        except OSError:
+            return ""
+        if not pointer.startswith("gitdir:"):
+            return ""
+        gitdir = pathlib.Path(pointer.split(":", 1)[1].strip())
     try:
         head = (gitdir / "HEAD").read_text().strip()
     except OSError:

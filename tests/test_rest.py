@@ -1000,3 +1000,17 @@ def test_build_id_marks_undeterminable_dirtiness(monkeypatch):
     monkeypatch.setattr(aif, "_git_dirty", lambda p: None)  # git could not tell
     assert aif.build_id().endswith("-unknown")  # a bare sha would have been a coin flip
     aif._compute_build.cache_clear()
+
+
+def test_build_id_follows_a_worktree_gitdir_file(tmp_path):
+    from aif import _git_sha
+
+    real = tmp_path / "main" / ".git" / "worktrees" / "wt1"
+    real.mkdir(parents=True)
+    (real / "HEAD").write_text("ref: refs/heads/master\n")
+    (real / "refs" / "heads").mkdir(parents=True)
+    (real / "refs" / "heads" / "master").write_text("e" * 40 + "\n")
+    wt = tmp_path / "wt1"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {real}\n")
+    assert _git_sha(wt / ".git") == "e" * 40  # the file is followed to the real gitdir

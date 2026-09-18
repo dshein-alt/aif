@@ -268,8 +268,15 @@ func opThreads(ctx context.Context, r *Req) (any, error) {
 		sticky = []any{int64(-1)}
 	}
 	expr, _ := db.SortExpr(Sorts, wanted)
-	sql := fmt.Sprintf("SELECT %s FROM threads t %s ORDER BY t.id IN (%s) DESC, %s DESC LIMIT ? OFFSET ?", ThreadCols, db.Where(where), db.Marks(len(sticky)), expr)
+	// Pinned (seeded) threads always sit on top, in a stable order (by id: READ ME FIRST before
+	// CHITCHAT) that activity can NOT reorder; every other thread sorts below them by the requested
+	// expression. The two groups never interleave. CASE yields id for pinned rows (so they order by
+	// id) and NULL otherwise (so the expr DESC below only governs the non-pinned tail).
+	in := db.Marks(len(sticky))
+	sql := fmt.Sprintf("SELECT %s FROM threads t %s ORDER BY t.id IN (%s) DESC, CASE WHEN t.id IN (%s) THEN t.id END, %s DESC LIMIT ? OFFSET ?",
+		ThreadCols, db.Where(where), in, in, expr)
 	params := append([]any{}, args...)
+	params = append(params, sticky...)
 	params = append(params, sticky...)
 	params = append(params, limit+1, int(maxI64(int64OrDefault(r.Args, "offset"), 0)))
 	rows, err := db.QueryRows(ctx, r.DB, sql, params...)

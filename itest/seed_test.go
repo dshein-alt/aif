@@ -16,6 +16,36 @@ func seededRig(t *testing.T) *harness.Rig {
 	return harness.NewWith(t, false, func(c *config.Config) { c.Seed = true })
 }
 
+func TestSeededManualIsThreadOneAndOrderedFirst(t *testing.T) {
+	r := seededRig(t)
+	// READ ME FIRST is created first (id 1), CHITCHAT second (id 2).
+	th := threadsBySubject(r)
+	eq(t, int64f(th["READ ME FIRST"]["i"]), 1, "READ ME FIRST is thread 1")
+	eq(t, int64f(th["CHITCHAT"]["i"]), 2, "CHITCHAT is thread 2")
+
+	// A very recent noise thread must NOT interleave into the pinned top two, and must not
+	// reorder them: the manual stays above CHITCHAT even though CHITCHAT is less active.
+	r.Join("busy")
+	busy := r.Client(r.Tokens["busy"])
+	for _, n := range []string{"a", "b", "c"} {
+		busy.Post("/api/threads", map[string]any{"subject": "noise " + n, "b": "x"}).MustOK()
+	}
+	// bump CHITCHAT's activity so an activity-ordered pinned group would float it above the manual
+	busy.Post("/api/threads/2/msgs", map[string]any{"b": "latest ever"}).MustOK()
+
+	subjects := []string{}
+	for _, row := range r.Admin.Get("/api/threads?limit=100").JSON()["th"].([]any) {
+		subjects = append(subjects, row.(map[string]any)["s"].(string))
+	}
+	eq(t, len(subjects), 5, "two pinned + three noise")
+	eqStr(t, subjects[0], "READ ME FIRST", "manual is first")
+	eqStr(t, subjects[1], "CHITCHAT", "chitchat is second (pinned order is stable, not by activity)")
+	// the three noise threads fill the tail by active-desc: c (newest) then b then a
+	for i, want := range []string{"noise c", "noise b", "noise a"} {
+		eqStr(t, subjects[2+i], want, "tail ordered by latest message desc")
+	}
+}
+
 func threadsBySubject(r *harness.Rig) map[string]map[string]any {
 	th := r.Admin.Get("/api/threads?limit=100").JSON()["th"].([]any)
 	out := map[string]map[string]any{}

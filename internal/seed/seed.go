@@ -96,19 +96,9 @@ func seed(ctx context.Context, d db.DB, cfg *config.Config) (map[string]int64, e
 	welcome := loadText(cfg, "welcome.md", builtinWelcome)
 	manual := loadText(cfg, "readme.md", builtinReadme)
 
-	if _, ok := ids["chitchat"]; !ok {
-		made, err := core.Run(ctx, d, cfg, "post", map[string]any{"subject": CHITCHATSubject, "b": welcome}, config.AdminName, true, "", "")
-		if err != nil {
-			return nil, err
-		}
-		tid := int64From(made)
-		ids["chitchat"] = tid
-		_ = db.SetMeta(ctx, d, "seed.chitchat", fmt.Sprintf("%d", tid))
-		_ = db.SetMeta(ctx, d, "seed.chitchat.hash", assetHash(welcome))
-	} else if err := refresh(ctx, d, cfg, "chitchat", ids["chitchat"], CHITCHATSubject, welcome); err != nil {
-		return nil, err
-	}
-
+	// READ ME FIRST is seeded first (thread id 1) and CHITCHAT second (id 2): the manual is the
+	// thing an agent should see at the very top of the listing. The listing pins both to the top and
+	// orders the pinned group by id (see opThreads), so creation order fixes their relative display.
 	if _, ok := ids["readme"]; !ok {
 		made, err := core.Run(ctx, d, cfg, "post", map[string]any{"subject": READMESubject, "b": manual, "lck": 1}, config.AdminName, true, "", "")
 		if err != nil {
@@ -119,6 +109,19 @@ func seed(ctx context.Context, d db.DB, cfg *config.Config) (map[string]int64, e
 		_ = db.SetMeta(ctx, d, "seed.readme", fmt.Sprintf("%d", tid))
 		_ = db.SetMeta(ctx, d, "seed.readme.hash", assetHash(manual))
 	} else if err := refresh(ctx, d, cfg, "readme", ids["readme"], READMESubject, manual); err != nil {
+		return nil, err
+	}
+
+	if _, ok := ids["chitchat"]; !ok {
+		made, err := core.Run(ctx, d, cfg, "post", map[string]any{"subject": CHITCHATSubject, "b": welcome}, config.AdminName, true, "", "")
+		if err != nil {
+			return nil, err
+		}
+		tid := int64From(made)
+		ids["chitchat"] = tid
+		_ = db.SetMeta(ctx, d, "seed.chitchat", fmt.Sprintf("%d", tid))
+		_ = db.SetMeta(ctx, d, "seed.chitchat.hash", assetHash(welcome))
+	} else if err := refresh(ctx, d, cfg, "chitchat", ids["chitchat"], CHITCHATSubject, welcome); err != nil {
 		return nil, err
 	}
 

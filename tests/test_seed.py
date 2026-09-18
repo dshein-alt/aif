@@ -183,3 +183,53 @@ def test_init_command_seeds_and_reports(tmp_path, monkeypatch):
     subjects = {r[0] for r in con.execute("SELECT subject FROM threads")}
     assert subjects == {"READ ME FIRST", "CHITCHAT"}
     assert con.execute("SELECT locked FROM threads WHERE subject = 'READ ME FIRST'").fetchone()[0] == 1
+
+
+# ------------------------------------------------------------- keeping the pins in sync (R1)
+
+
+def test_the_manual_updates_when_the_asset_changes(tmp_path):
+    custom = tmp_path / "brand"
+    custom.mkdir()
+    (custom / "readme.md").write_text("MANUAL v1")
+    (custom / "welcome.md").write_text("welcome v1")
+    cli = make(tmp_path, assets_dir=str(custom))
+    cli.rig.claim("reader")
+    cli.get("/api/unread", headers=cli.rig.headers("reader"))  # clear the join-time duty
+    readme = threads_by_subject(cli)["READ ME FIRST"]
+    assert cli.get(f"/api/threads/{readme['i']}").json()["pin"]["b"] == "MANUAL v1"
+
+    (custom / "readme.md").write_text("MANUAL v2 - now with the invite flow")
+    with db.session(cli.app.state.cfg) as conn:
+        assert seed.refresh(cli.app.state.cfg, conn, "readme", readme["i"], "READ ME FIRST", (custom / "readme.md").read_text()) is True
+
+    page = cli.get(f"/api/threads/{readme['i']}").json()
+    assert page["pin"]["b"] == "MANUAL v2 - now with the invite flow"  # the description is current
+    assert page["lck"] == 1  # still locked
+    notes = [m for m in page["ms"] if "updated to revision" in m["b"]]
+    assert len(notes) == 1 and notes[0]["a"] == "gatekeeper"
+    unread = cli.get("/api/unread", headers=cli.rig.headers("reader")).json()
+    assert [m["i"] for m in unread["ms"]] == [notes[0]["i"]]  # the note is how subscribers learn
+
+
+def test_refresh_is_idempotent_and_legacy_dbs_converge_once(tmp_path):
+    custom = tmp_path / "brand"
+    custom.mkdir()
+    (custom / "readme.md").write_text("CURRENT")
+    (custom / "welcome.md").write_text("welcome")
+    cli = make(tmp_path, assets_dir=str(custom))
+    readme = threads_by_subject(cli)["READ ME FIRST"]
+
+    with db.session(cli.app.state.cfg) as conn:  # simulate a pre-hash database: no meta, stale pin
+        conn.execute("DELETE FROM meta WHERE key = 'seed.readme.hash'")
+        conn.execute("UPDATE messages SET body = 'LEGACY TEXT' WHERE thread = ?", [readme["i"]])
+        assert seed.refresh(cli.app.state.cfg, conn, "readme", readme["i"], "READ ME FIRST", "CURRENT") is True
+        assert seed.refresh(cli.app.state.cfg, conn, "readme", readme["i"], "READ ME FIRST", "CURRENT") is False  # and then quiet
+    page = cli.get(f"/api/threads/{readme['i']}").json()
+    assert page["pin"]["b"] == "CURRENT"
+    assert len([m for m in page["ms"] if "updated to revision" in m["b"]]) == 1  # exactly one note
+
+    with db.session(cli.app.state.cfg) as conn:  # a no-op run changes nothing at all
+        before = conn.execute("SELECT COUNT(*) c FROM messages WHERE thread = ?", [readme["i"]]).fetchone()["c"]
+        assert seed.refresh(cli.app.state.cfg, conn, "readme", readme["i"], "READ ME FIRST", "CURRENT") is False
+        assert conn.execute("SELECT COUNT(*) c FROM messages WHERE thread = ?", [readme["i"]]).fetchone()["c"] == before

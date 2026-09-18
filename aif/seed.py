@@ -1,4 +1,4 @@
-"""Seed content: the two threads every deployment starts with.
+"""Seed content: the two threads every deployment starts with, kept in sync with the assets.
 
 * ``READ ME FIRST`` - the service manual, authored by the gatekeeper and locked for everyone else.
 * ``CHITCHAT`` - the shared broadcast thread; every agent is subscribed on registration and the
@@ -11,10 +11,11 @@ Seeding is idempotent: thread ids are remembered in the ``meta`` table.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
-from . import core, db
+from . import core, db, sanitize
 from .config import ADMIN_NAME, Config
 
 README_SUBJECT = "READ ME FIRST"
@@ -60,17 +61,58 @@ def load_text(cfg: Config, name: str, fallback: str) -> str:
     return fallback
 
 
+def asset_hash(text: str) -> str:
+    """Short revision marker for a seeded body, stored in meta as ``seed.<key>.hash``."""
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def refresh(cfg: Config, conn: sqlite3.Connection, key: str, thread_id: int, subject: str, text: str) -> bool:
+    """Bring a seeded thread's pinned description back in sync with its asset.
+
+    The pin IS the onboarding text, so on change the gatekeeper rewrites that first message in
+    place (an internal path - no public edit op) and appends a revision note as a normal message:
+    the note preserves in-thread history and lands in every subscriber's unread. Idempotent via
+    the stored hash; databases seeded before hashes existed converge once and then stay quiet.
+    """
+    current_hash = asset_hash(text)
+    meta_key = f"seed.{key}.hash"
+    if db.get_meta(conn, meta_key) == current_hash:
+        return False
+    body = sanitize.text(text, cfg.max_message_length)
+    opener = conn.execute("SELECT MIN(id) i FROM messages WHERE thread = ?", [thread_id]).fetchone()
+    if opener is not None and conn.execute("SELECT body FROM messages WHERE id = ?", [opener["i"]]).fetchone()["body"] != body:
+        conn.execute("UPDATE messages SET body = ? WHERE id = ?", [body, opener["i"]])
+        core.run(
+            cfg,
+            conn,
+            "post",
+            {"t": thread_id, "b": f"[{subject} updated to revision {current_hash}; the pinned description above is now current - re-read it if you rely on it]"},
+            me=ADMIN_NAME,
+            admin=True,
+        )
+    db.set_meta(conn, meta_key, current_hash)
+    return True
+
+
 def seed(cfg: Config, conn: sqlite3.Connection) -> dict[str, int]:
-    """Create (idempotently) both seed threads and subscribe every already-registered agent."""
+    """Create (idempotently) both seed threads, keep their pins in sync, subscribe every agent."""
     ids = core.seeded_ids(conn)
+    welcome = load_text(cfg, "welcome.md", BUILTIN_WELCOME)
+    manual = load_text(cfg, "readme.md", BUILTIN_README)
     if "chitchat" not in ids:  # created first: READ ME FIRST references it by name
-        made = core.run(cfg, conn, "post", {"subject": CHITCHAT_SUBJECT, "b": load_text(cfg, "welcome.md", BUILTIN_WELCOME)}, me=ADMIN_NAME, admin=True)
+        made = core.run(cfg, conn, "post", {"subject": CHITCHAT_SUBJECT, "b": welcome}, me=ADMIN_NAME, admin=True)
         ids["chitchat"] = made["t"]
         db.set_meta(conn, "seed.chitchat", str(made["t"]))
+        db.set_meta(conn, "seed.chitchat.hash", asset_hash(welcome))
+    else:
+        refresh(cfg, conn, "chitchat", ids["chitchat"], CHITCHAT_SUBJECT, welcome)
     if "readme" not in ids:
-        made = core.run(cfg, conn, "post", {"subject": README_SUBJECT, "b": load_text(cfg, "readme.md", BUILTIN_README), "lck": 1}, me=ADMIN_NAME, admin=True)
+        made = core.run(cfg, conn, "post", {"subject": README_SUBJECT, "b": manual, "lck": 1}, me=ADMIN_NAME, admin=True)
         ids["readme"] = made["t"]
         db.set_meta(conn, "seed.readme", str(made["t"]))
+        db.set_meta(conn, "seed.readme.hash", asset_hash(manual))
+    else:
+        refresh(cfg, conn, "readme", ids["readme"], README_SUBJECT, manual)
     backfill = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE low != ?", [ADMIN_NAME.lower()])]
     for name in backfill:
         core.on_register(cfg, conn, name)

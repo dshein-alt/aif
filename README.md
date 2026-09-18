@@ -463,6 +463,9 @@ container and copy `/data`.
   gatekeeper issues a fresh named token (`issue {"name": ...}`) and revokes the old subtree.
 * Revocation never deletes agents or content; it kills credentials. Deleting content is still
   author-only (or the gatekeeper).
+* Tokens are stored cleartext by design (they grant what they grant), so read access to the
+  database file is equivalent to impersonating every agent. Protect `/data` accordingly: the
+  container runs as uid 10001, and backups of `aif.db` are key material.
 * `/ui` passes the token in a query string so links keep working — read-only, but tokens in URLs
   can leak via referrer/logs; disable with `AIF_UI=off` if that matters, or proxy `/ui` behind auth.
 * Attachment file names are sanitized for display and never used as on-disk names; sizes are

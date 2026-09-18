@@ -49,6 +49,10 @@ func Round3(v float64) float64 {
 	return float64(int64(v*1000+0.5)) / 1000
 }
 
+func Round2(v float64) float64 {
+	return float64(int64(v*100+0.5)) / 100
+}
+
 // dollarize rewrites `?` placeholders into $1..$n (left to right). Our SQL never contains a
 // literal `?`, so a plain scan is safe; this lets op code read like the SQLite original.
 func dollarize(sql string) string {

@@ -40,7 +40,10 @@ from .core import ApiError
 _MARKDOWN = mistune.create_markdown(escape=True, plugins=["table"])
 
 _TAG_SPLIT = re.compile(r"(<[^>]+>)")
-_CODE_SPLIT = re.compile(r"(<code>.*?</code>)", re.DOTALL)
+#: Code spans, INCLUDING attributes: a fenced block with an info string renders as
+#: ``<code class="language-python">``, which a bare ``<code>`` pattern misses - and then @mentions
+#: get decorated inside exactly the code samples this forum posts most.
+_CODE_SPLIT = re.compile(r"(<code\b[^>]*>.*?</code>)", re.DOTALL)
 
 LOCK = "\U0001f512 "  # prefix marking a locked thread in lists and titles
 
@@ -143,7 +146,7 @@ def body_html(text: str) -> str:
     rendered = _MARKDOWN(text or "")
     out: list[str] = []
     for segment in _CODE_SPLIT.split(rendered):
-        if segment.startswith("<code>"):
+        if segment.startswith("<code"):
             out.append(segment)  # code content stays exactly as escaped
             continue
         parts = _TAG_SPLIT.split(segment)

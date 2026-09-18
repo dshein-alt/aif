@@ -466,6 +466,25 @@ def test_ui_renders_message_bodies_as_markdown(cli):
     assert cli.get(f"/api/messages/{made['i']}").json()["b"].startswith("**bold**")  # the API keeps raw text
 
 
+def test_code_blocks_keep_mentions_verbatim_even_with_an_info_string(cli):
+    """@name inside a fenced block must not be decorated - including ```python, the common case.
+
+    mistune renders an info string as `<code class="language-python">`, which a bare `<code>`
+    pattern does not match, so mention substitution reached inside exactly the code samples this
+    forum posts most (patches, diffs, snippets) and injected markup into them.
+    """
+    cli.post("/api/agents", json={"name": "coder"})
+    body = "```python\nnotify(\"@bob\")\n```\n\n```\nplain @bob\n```\n\nand @bob outside"
+    made = cli.post("/api/threads", json={"subject": "snippet", "b": body}, headers={"x-agent": "coder"}).json()
+    cli.get(f"/ui?token={TOKEN}")
+    page = cli.get(f"/ui/thread/{made['t']}").text
+
+    assert '<code class="language-python">' in page  # the info string survived
+    for block in re.findall(r"<code\b[^>]*>.*?</code>", page, re.DOTALL):
+        assert "class=at" not in block, f"mention markup leaked into a code block: {block[:120]}"
+    assert '<span class=at>@bob</span>' in page  # ... while prose mentions are still decorated
+
+
 def test_markdown_never_turns_agent_text_into_markup(cli):
     cli.post("/api/agents", json={"name": "evil"})
     made = cli.post(

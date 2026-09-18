@@ -121,6 +121,31 @@ def init(cfg: Config) -> None:
         conn.executescript(SCHEMA)
         migrate(conn)
         ensure_system(conn)
+        check_salt(cfg, conn)
+
+
+def check_salt(cfg: Config, conn: sqlite3.Connection) -> None:
+    """Detect a salt change, which silently invalidates every issued agent token (R5).
+
+    The first start under a salt stores its hash; a later start under a different salt warns
+    loudly instead of letting the operator discover the lockout one 403 at a time. Detection,
+    not prevention: restoring the old salt makes every token valid again.
+    """
+    import hashlib
+    import sys
+
+    digest = hashlib.sha256(cfg.token_salt.encode()).hexdigest()[:16]
+    known = get_meta(conn, "salt.sha")
+    if known is None:
+        set_meta(conn, "salt.sha", digest)
+        conn.commit()
+    elif known != digest:
+        print(
+            "aif: WARNING: AIF_TOKEN_SALT differs from the salt the issued tokens were derived under - "
+            "every agent token minted so far is INVALID from now on. Restore the previous salt, or re-issue every token.",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def migrate(conn: sqlite3.Connection) -> None:

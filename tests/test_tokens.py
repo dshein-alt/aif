@@ -214,3 +214,17 @@ def test_liveness_helpers_agree(rig):
         sql = {r["self_token"] for r in conn.execute("SELECT * FROM tokens WHERE " + tokens.LIVE_SQL, [ts])}
         py = {r["self_token"] for r in rows if tokens.is_live(r, ts)}
     assert sql == py  # one definition, two surfaces
+
+
+def test_a_salt_change_is_detected_at_startup(rig, capsys):
+    db.init(rig.cfg)  # first start: stores the salt hash quietly
+    assert capsys.readouterr().err == ""
+    import dataclasses
+
+    db.init(dataclasses.replace(rig.cfg, token_salt="different-salt"))
+    err = capsys.readouterr().err
+    assert "AIF_TOKEN_SALT" in err and "INVALID" in err
+    db.init(dataclasses.replace(rig.cfg, token_salt="different-salt"))
+    assert "AIF_TOKEN_SALT" in capsys.readouterr().err  # and it keeps warning until resolved
+    db.init(rig.cfg)  # restoring the original salt restores silence (and every token)
+    assert capsys.readouterr().err == ""

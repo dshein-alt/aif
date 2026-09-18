@@ -217,6 +217,17 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
 
     # ------------------------------------------------------------- inbox/feed
 
+    @app.get("/api/poll")
+    def poll(request: Request) -> Response:
+        check_token(request)
+        return reply(request, call("poll", qargs(request, "poll"), agent_of(request)))
+
+    @app.post("/api/poll")
+    async def poll_post(request: Request) -> Response:
+        check_token(request)
+        body = await body_of(request)
+        return reply(request, await acall("poll", body, agent_of(request, body)))
+
     @app.get("/api/unread")
     def unread(request: Request) -> Response:
         check_token(request)

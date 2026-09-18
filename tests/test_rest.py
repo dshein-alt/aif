@@ -636,3 +636,75 @@ def test_storage_is_metadata_plus_blob(cli, tmp_path):
     assert cols == {"id", "key", "mid", "name", "type", "size", "sha", "created", "exp"}
     assert con.execute("SELECT name FROM files").fetchone()[0] == "data.txt"
     assert con.execute("SELECT length(key) FROM files").fetchone()[0] == 32
+
+
+# ------------------------------------------------------------------------------ poll
+
+
+def test_poll_counts_without_touching_anything(cli):
+    register(cli, "a1")
+    register(cli, "a2")
+    tid = cli.post("/api/threads", json={"subject": "weekly", "b": "hello"}, headers=as_agent(cli, "a1")).json()["t"]
+    cli.post(f"/api/threads/{tid}/msgs", json={"b": "ping @a2"}, headers=as_agent(cli, "a1"))
+
+    before = cli.get("/api/poll", headers=as_agent(cli, "a2")).json()
+    assert before["n"] == 1 and before["men"] == 1 and before["cursor"] == 0 and "ms" not in before
+    assert before["th"] == [{"i": tid, "un": 1}]  # the tag follows them into the thread, history stays read
+    assert cli.get("/api/poll", headers=as_agent(cli, "a2")).json() == before  # idempotent, nothing advanced
+    assert cli.get("/api/agents?q=a2").json()["a"][0]["seen"] > 0  # still a heartbeat
+
+    after = cli.get("/api/unread", headers=as_agent(cli, "a2")).json()
+    assert after["n"] == 1 and cli.get("/api/poll", headers=as_agent(cli, "a2")).json()["n"] == 0
+
+
+def test_poll_agrees_with_unread(cli):
+    register(cli, "a1")
+    register(cli, "a2")
+    register(cli, "a3")
+    followed = cli.post("/api/threads", json={"subject": "followed", "b": "x"}, headers=as_agent(cli, "a1")).json()["t"]
+    cli.post("/api/sub", json={"t": followed}, headers=as_agent(cli, "a2"))
+    other = cli.post("/api/threads", json={"subject": "noise", "b": "y"}, headers=as_agent(cli, "a3")).json()["t"]
+    for i in range(3):
+        cli.post(f"/api/threads/{followed}/msgs", json={"b": f"nudge {i} @a2"}, headers=as_agent(cli, "a1"))
+    cli.post(f"/api/threads/{other}/msgs", json={"b": "shout into the void"}, headers=as_agent(cli, "a3"))
+
+    peek = cli.get("/api/unread?advance=0", headers=as_agent(cli, "a2")).json()
+    polled = cli.get("/api/poll", headers=as_agent(cli, "a2")).json()
+    assert polled["n"] == peek["n"] == 3 and polled["men"] == 3 and polled["th"] == [{"i": followed, "un": 3}]
+
+
+def test_poll_can_advance_and_count_my_own_posts(cli):
+    register(cli, "a1")
+    register(cli, "a2")
+    tid = cli.post("/api/threads", json={"subject": "mine", "b": "start"}, headers=as_agent(cli, "a1")).json()["t"]
+    cli.post(f"/api/threads/{tid}/msgs", json={"b": "reply"}, headers=as_agent(cli, "a1"))
+    mine = cli.get("/api/poll?mine=1", headers=as_agent(cli, "a1")).json()
+    assert mine["n"] == 2 and mine["men"] == 0
+    advanced = cli.get("/api/poll?advance=1", headers=as_agent(cli, "a1")).json()
+    assert advanced["n"] == 0 and "adv" not in advanced  # own posts are not pending for the author
+
+
+def test_poll_skip_breakdown_and_report_more_threads(cli):
+    register(cli, "a1")
+    register(cli, "a2")
+    for i in range(3):
+        tid = cli.post("/api/threads", json={"subject": f"t{i}", "b": "x"}, headers=as_agent(cli, "a1")).json()["t"]
+        cli.post("/api/sub", json={"t": tid}, headers=as_agent(cli, "a2"))
+        cli.post(f"/api/threads/{tid}/msgs", json={"b": f"news {i}"}, headers=as_agent(cli, "a1"))
+    assert "th" not in cli.get("/api/poll?threads=0", headers=as_agent(cli, "a2")).json()
+    assert cli.get("/api/poll?top=2", headers=as_agent(cli, "a2")).json()["more_threads"] == 1
+    assert len(cli.get("/api/poll?top=3", headers=as_agent(cli, "a2")).json()["th"]) == 3
+
+
+def test_poll_requires_an_agent_identity(cli):
+    assert cli.get("/api/poll").status_code == 401
+    register(cli, "a1")
+    via_op = cli.post("/api/op", json={"do": "poll"}, headers=as_agent(cli, "a1")).json()
+    assert via_op["n"] == 0 and via_op["cursor"] == 0
+
+
+def test_poll_is_documented_on_every_surface(cli):
+    card = cli.get("/api/skill").text
+    assert "/api/poll" in card and "poll {advance?" in card
+    assert "poll" in cli.get("/api/skill?format=json").json()["ops"]
+    assert "/api/poll" in cli.get("/openapi.json").json()["paths"]

@@ -553,7 +553,7 @@ def op_post(
     touch_thread(conn, tid)
     ensure_sub(conn, me, tid, mid)  # the author has read this thread up to their own post
     for name in mentions:
-        ensure_sub(conn, name, tid, prev_last)  # keep this message unread for the people tagged
+        follow_thread(conn, name, tid, prev_last)  # follow, but keep this message unread for them
     out: dict[str, Any] = {"ok": 1, "i": mid, "t": tid}
     if mentions:
         out["at"] = mentions
@@ -713,6 +713,15 @@ def ensure_sub(conn: sqlite3.Connection, agent: str, thread_id: int, seen: int =
     )
 
 
+def follow_thread(conn: sqlite3.Connection, agent: str, thread_id: int, seen: int = 0) -> None:
+    """Follow a thread, setting the read mark **only when the subscription is new**.
+
+    Used when someone is tagged: their existing cursor must survive, otherwise a second tag in a
+    thread would mark the first (still unread) message as read and it would vanish from the inbox.
+    """
+    conn.execute("INSERT INTO subs (agent, thread, seen) VALUES (?,?,?) ON CONFLICT(agent, thread) DO NOTHING", [agent, thread_id, seen])
+
+
 def set_thread_seen(conn: sqlite3.Connection, agent: str, thread_id: int, seq: int) -> None:
     conn.execute(
         "INSERT INTO subs (agent, thread, seen) VALUES (?,?,?) ON CONFLICT(agent, thread) DO UPDATE SET seen = MAX(seen, excluded.seen)",
@@ -771,6 +780,51 @@ def subscriptions(cfg: Config, conn: sqlite3.Connection, agent: str, limit: int 
     return out
 
 
+INBOX_FROM = """
+        FROM messages m
+        LEFT JOIN subs s ON s.thread = m.thread AND s.agent = ?
+        WHERE m.id > ?
+          AND (
+                (? = 1 AND m.author = ?)
+             OR (m.author != ?
+                 AND m.id > COALESCE(s.seen, 0)
+                 AND (EXISTS (SELECT 1 FROM mentions mn WHERE mn.mid = m.id AND mn.agent = ?)
+                      OR s.thread IS NOT NULL))
+          )
+"""
+
+@op(
+    "poll",
+    "cheap 'is there anything for me?' check: how many messages, which threads, no bodies, no cursor movement",
+    {"advance": "1 = also clear them (moves the same cursors unread does); default 0 = just look", "mine": "1 = count my own posts too", "threads": "0 = skip the per-thread breakdown", "top": "how many threads to break down (default 20)"},
+    aliases={"clear": "advance", "su": "threads"},
+    bools=("advance", "mine", "threads"),
+    ints=("top",),
+    write=True,
+)
+def op_poll(cfg: Config, conn: sqlite3.Connection, me: str, advance: bool = False, mine: bool = False, threads: bool = True, top: int = 20, **_: Any) -> dict[str, Any]:
+    """Counts only - the cheapest way for an agent to decide whether to call ``unread``."""
+    cursor = conn.execute("SELECT cursor FROM agents WHERE name = ?", [me]).fetchone()["cursor"]
+    params = [me, cursor, 1 if mine else 0, me, me, me]
+    n = conn.execute("SELECT COUNT(*) c" + INBOX_FROM, params).fetchone()["c"]
+    men = conn.execute("SELECT COUNT(*) c" + INBOX_FROM + " AND EXISTS (SELECT 1 FROM mentions mn2 WHERE mn2.mid = m.id AND mn2.agent = ?)", [*params, me]).fetchone()["c"]
+    out: dict[str, Any] = {"n": n, "men": men, "seq": max_seq(conn), "cursor": cursor}
+    breakdown = {r["thread"]: r for r in conn.execute(
+        "SELECT m.thread thread, COUNT(*) c, MAX(m.id) mx" + INBOX_FROM + " GROUP BY m.thread ORDER BY c DESC LIMIT ?", [*params, max(1, min(top, 200))]
+    )}
+    if threads:
+        out["th"] = [{"i": tid, "un": r["c"]} for tid, r in breakdown.items()]
+        if n > sum(r["c"] for r in breakdown.values()):
+            out["more_threads"] = 1
+    if advance and n:
+        new = conn.execute("SELECT MAX(m.id) mx" + INBOX_FROM, params).fetchone()["mx"]
+        conn.execute("UPDATE agents SET cursor = ? WHERE name = ?", [new, me])
+        for tid, row in conn.execute("SELECT m.thread thread, MAX(m.id) mx" + INBOX_FROM + " GROUP BY m.thread", params):
+            set_thread_seen(conn, me, tid, row["mx"])
+        out["adv"] = new
+    return out
+
+
 @op(
     "unread",
     "your inbox: new messages that tag you or sit in a thread you follow; advances your cursor by default",
@@ -784,19 +838,9 @@ def op_unread(cfg: Config, conn: sqlite3.Connection, me: str, advance: bool = Tr
     limit = clamp_limit(cfg, limit, cfg.feed_default_limit, 500)
     cursor = conn.execute("SELECT cursor FROM agents WHERE name = ?", [me]).fetchone()["cursor"]
     rows = conn.execute(
-        """
-        SELECT m.* FROM messages m
-        LEFT JOIN subs s ON s.thread = m.thread AND s.agent = ?
-        WHERE m.id > ?
-          AND (
-                (? = 1 AND m.author = ?)
-             OR (m.author != ?
-                 AND m.id > COALESCE(s.seen, 0)
-                 AND (EXISTS (SELECT 1 FROM mentions mn WHERE mn.mid = m.id AND mn.agent = ?)
-                      OR s.thread IS NOT NULL))
-          )
-        ORDER BY m.id LIMIT ?
-        """,
+        "SELECT m.*"
+        + INBOX_FROM
+        + " ORDER BY m.id LIMIT ?",
         [me, cursor, 1 if mine else 0, me, me, me, limit + 1],
     ).fetchall()
     page = rows[:limit]

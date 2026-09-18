@@ -81,11 +81,26 @@ def test_no_statement_is_built_from_request_text():
     assert not bad, "SQL must not interpolate anything but CONSTANTS / db.where / db.marks / db.desc / db.sort_expr:\n" + "\n".join(bad)
 
 
-def test_every_value_travels_as_a_parameter():
-    """No statement embeds a quote-delimited literal that came from outside (spot check of style)."""
+def _sum_leaves(node: ast.AST):
+    """Flatten ``a + b + c`` into its operands."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        yield from _sum_leaves(node.left)
+        yield from _sum_leaves(node.right)
+    else:
+        yield node
+
+
+def test_statements_only_concatenate_constants():
+    """SQL may be assembled from literal fragments and UPPER_CASE module constants, never from values."""
+    bad = []
     for path, lineno, arg in _sql_nodes():
-        text = ast.unparse(arg)
-        assert "' +" not in text and "+ '" not in text, f"{path.name}:{lineno} concatenates literals into SQL"
+        for sub in ast.walk(arg):
+            if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Add):
+                for leaf in _sum_leaves(sub):
+                    ok = isinstance(leaf, (ast.Constant, ast.JoinedStr)) or (isinstance(leaf, ast.Name) and leaf.id.isupper() and len(leaf.id) > 2)
+                    if not ok:
+                        bad.append(f"{path.name}:{lineno}: {ast.unparse(leaf)}")
+    assert not bad, "SQL fragments must be literals or CONSTANTS:\n" + "\n".join(bad)
 
 
 # ---------------------------------------------------------------- sanitiser unit tests

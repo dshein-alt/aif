@@ -52,6 +52,29 @@ def test_an_agent_token_opens_a_readonly_ui_session(rig):
     assert res.status_code == 401 and "Sign in" in res.text  # revoked token, dead session
 
 
+def test_the_session_dies_with_its_own_token_not_just_the_name(rig):
+    """An agent may hold several live tokens; revoking the one that opened the session must end it.
+
+    The gatekeeper's recovery flow mints a second live token for a registered name, so "does this
+    agent still have any live token" is a different - and weaker - question than "is the token that
+    opened this session still live". Asking the weak one left a revoked credential browsing.
+    """
+    rig.claim("dave")
+    opened_with = rig.agent_tokens["dave"]
+    recovery = rig.admin.post("/api/op", json={"do": "issue", "name": "dave"}).json()["token"]  # a 2nd live token
+
+    browser = rig.client()
+    assert browser.get(f"/ui?token={opened_with}").status_code == 200
+    assert browser.get("/ui").status_code == 200
+
+    rig.admin.post("/api/op", json={"do": "revoke", "tk": opened_with})
+    assert rig.client(opened_with).get("/api/ping").status_code == 403  # the credential is dead
+    assert browser.get("/ui").status_code == 401  # ... and so is the session it opened
+
+    fresh = rig.client()  # the surviving token still opens its own session
+    assert fresh.get(f"/ui?token={recovery}").status_code == 200
+
+
 def test_web_token_config(tmp_path):
     from aif.config import Config
 

@@ -89,6 +89,7 @@ def page_window(cur: int, pages: int, span: int = 2) -> list[int | None]:
 COOKIE = "aif_ui"
 SESSION_META_KEY = "ui.session_salt"
 SESSION_HMAC_LEN = 24
+SUBJECT_SEP = "#"  # agent session subject is "<name>#<token row id>"; never ":" (the field separator)
 
 
 def stamp(epoch: float | None) -> str:
@@ -191,7 +192,11 @@ def credential_session(cfg: Config, conn, credential: str, now: float) -> tuple[
     row = tokens.lookup(conn, credential)
     if row is not None and row["claimed"] and not row["revoked"] and (not row["exp"] or row["exp"] > now):
         exp = int(min(now + cfg.ui_session_ttl, row["exp"])) if row["exp"] else int(now + cfg.ui_session_ttl)
-        return "agent", row["name"], exp
+        # The subject names the exact token row, not just the agent: an agent may hold several live
+        # tokens at once (the gatekeeper's recovery flow mints a second one for a registered name),
+        # and revoking the one that opened this session must end it - "some token for this name is
+        # still alive" is not the same question.
+        return "agent", f"{row['name']}{SUBJECT_SEP}{row['id']}", exp
     return None
 
 
@@ -212,8 +217,11 @@ def session_live(cfg: Config, conn, value: str, now: float) -> dict[str, Any] | 
         known = [hashlib.sha256(t.encode()).hexdigest()[:12] for t in (*cfg.all_tokens, cfg.web_token) if t]
         return {"kind": kind, "subject": subject, "exp": exp} if subject in known else None
     if kind == "agent":
-        row = conn.execute("SELECT 1 FROM tokens " + db.where(["low = ?", "claimed IS NOT NULL", tokens.LIVE_SQL]), [subject.lower(), now]).fetchone()
-        return {"kind": kind, "subject": subject, "exp": exp} if row else None
+        name, _, token_id = subject.partition(SUBJECT_SEP)
+        if not token_id.isdigit():  # pre-0.2.2 cookie: it named only the agent, so it cannot be checked
+            return None            # against the token that opened it. Force one re-login.
+        row = conn.execute("SELECT 1 FROM tokens " + db.where(["id = ?", "low = ?", "claimed IS NOT NULL", tokens.LIVE_SQL]), [int(token_id), name.lower(), now]).fetchone()
+        return {"kind": kind, "subject": name, "exp": exp} if row else None
     return None
 
 

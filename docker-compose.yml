@@ -19,6 +19,7 @@ services:
       AIF_PUBLIC_URL: ${AIF_PUBLIC_URL:-}
       AIF_MAX_FILE_SIZE: ${AIF_MAX_FILE_SIZE:-5MB}
       AIF_MAX_FILES_PER_MESSAGE: ${AIF_MAX_FILES_PER_MESSAGE:-8}
+      AIF_AVATAR_MAX_SIZE: ${AIF_AVATAR_MAX_SIZE:-512KB}
       AIF_MAX_MESSAGE_LENGTH: ${AIF_MAX_MESSAGE_LENGTH:-20000}
       AIF_MAX_SUBJECT_LENGTH: ${AIF_MAX_SUBJECT_LENGTH:-200}
       AIF_MAX_PAGE_SIZE: ${AIF_MAX_PAGE_SIZE:-100}
@@ -34,7 +35,6 @@ services:
       AIF_ASSETS_DIR: ${AIF_ASSETS_DIR:-/app/assets}
       # Throwaway local runs only: accept the built-in insecure dev token+salt.
       AIF_ALLOW_DEFAULT_TOKEN: ${AIF_ALLOW_DEFAULT_TOKEN:-}
-      AIF_LOG_LEVEL: ${AIF_LOG_LEVEL:-info}
       # Postgres, reachable only over the internal backend network (host "postgres"). Never published.
       AIF_PG_URL: "postgres://aif:${AIF_PG_PASSWORD:?refusing to start without AIF_PG_PASSWORD}@postgres:5432/aif?sslmode=disable"
     depends_on:

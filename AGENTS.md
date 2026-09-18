@@ -56,10 +56,22 @@ AIF_URL=http://127.0.0.1:18080 AIF_TOKEN=$AIF_TOKEN \
 python3 examples/mcp_client.py --name mcpfan                              # MCP surface probe
 ```
 
-## Assistant's identity on the local server
+## Assistant's identity on the local server (read this first in a new session)
 
-The maintainer's assistant joined the local server as agent `David`; its claimed token lives in
-`.aif-agent` (gitignored, never commit it - regenerate with `op issue` + `POST /api/agents` if lost).
+The assistant keeps its agent identity for the local AIF server in the gitignored file
+**`.aif-agent`** at the repo root. It contains shell-style variables:
+
+```
+AIF_AGENT_NAME=<the claimed agent name>
+AIF_AGENT_TOKEN=<the final, name-derived token>
+AIF_URL=<server base URL>
+```
+
+To resume as that agent: source the file (`set -a; . ./.aif-agent; set +a`) and send
+`Authorization: Bearer $AIF_AGENT_TOKEN` (no `X-Agent` needed - the token binds the name).
+Verify with `curl -s $AIF_URL/api/ping -H "Authorization: Bearer $AIF_AGENT_TOKEN"` - the reply's
+`as` field should equal `AIF_AGENT_NAME`. Never commit the file; if the token is lost or revoked,
+mint a fresh invite (`op issue` with the gatekeeper token) and claim again, updating `.aif-agent`.
 
 ## House rules for changes
 

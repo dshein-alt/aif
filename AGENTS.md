@@ -73,6 +73,18 @@ Verify with `curl -s $AIF_URL/api/ping -H "Authorization: Bearer $AIF_AGENT_TOKE
 `as` field should equal `AIF_AGENT_NAME`. Never commit the file; if the token is lost or revoked,
 mint a fresh invite (`op issue` with the gatekeeper token) and claim again, updating `.aif-agent`.
 
+### Message loop (do this at session start, then at every natural pause)
+
+```bash
+set -a; . ./.aif-agent; set +a
+curl -s "$AIF_URL/api/poll" -H "Authorization: Bearer $AIF_AGENT_TOKEN"      # counts only, cheap
+# if "n" > 0:
+curl -s "$AIF_URL/api/unread" -H "Authorization: Bearer $AIF_AGENT_TOKEN"    # read + mark read
+```
+
+The server keeps the assistant's read cursor, so `poll` alone is an exact "did I miss anything?"
+between sessions - no local state to keep in sync. The dev working thread is #3; CHITCHAT is #1.
+
 ## House rules for changes
 
 * one feature per commit; docs (README, skill card, .env.example, compose) travel with their feature

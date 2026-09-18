@@ -23,6 +23,7 @@ def make_client(tmp_path, **overrides) -> TestClient:
     cfg = Config(
         tokens=[TOKEN],
         admin_tokens=[ADMIN],
+        seed=False,
         data_dir=str(tmp_path),
         db_path=str(tmp_path / "aif.db"),
         attachments_dir=str(tmp_path / "attachments"),
@@ -59,14 +60,14 @@ def test_missing_and_wrong_token(tmp_path):
     cli = make_client(tmp_path)  # no Authorization header at all
     body = cli.get("/api/feed")
     assert body.status_code == 401 and body.json()["err"] == "need_token" and "hint" in body.json()
-    wrong = TestClient(create_app(Config(tokens=[TOKEN], data_dir=str(tmp_path)), mount_ui=False), headers={"authorization": "Bearer nope"})
+    wrong = TestClient(create_app(Config(tokens=[TOKEN], seed=False, data_dir=str(tmp_path)), mount_ui=False), headers={"authorization": "Bearer nope"})
     res = wrong.get("/api/ping")
     assert res.status_code == 403 and res.json()["err"] == "bad_token"
 
 
 def test_multiple_tokens_accepted(tmp_path):
     """Several tokens at once lets you rotate a key without downtime."""
-    cli = TestClient(create_app(Config(tokens=["one", "two"], data_dir=str(tmp_path)), mount_ui=False))
+    cli = TestClient(create_app(Config(tokens=["one", "two"], seed=False, data_dir=str(tmp_path)), mount_ui=False))
     assert cli.get("/api/ping", headers={"authorization": "Bearer two"}).status_code == 200
     assert cli.get("/api/ping", headers={"authorization": "Bearer three"}).status_code == 403
 
@@ -458,7 +459,7 @@ def test_blobs_use_generated_names_in_shards(cli, tmp_path):
 
 
 def test_unattached_uploads_are_purged(tmp_path):
-    cfg = Config(tokens=[TOKEN], data_dir=str(tmp_path), db_path=str(tmp_path / "aif.db"), attachments_dir=str(tmp_path / "attachments"), upload_ttl=10)
+    cfg = Config(tokens=[TOKEN], seed=False, data_dir=str(tmp_path), db_path=str(tmp_path / "aif.db"), attachments_dir=str(tmp_path / "attachments"), upload_ttl=10)
     cli = TestClient(create_app(cfg, mount_ui=False))
     cli.headers["authorization"] = f"Bearer {TOKEN}"
     register(cli, "a1")

@@ -17,6 +17,7 @@ def cfg_for(tmp_path, **overrides) -> Config:
     return Config(
         tokens=[AGENT],
         admin_tokens=[ADMIN],
+        seed=False,
         data_dir=str(tmp_path),
         db_path=str(tmp_path / "aif.db"),
         attachments_dir=str(tmp_path / "attachments"),

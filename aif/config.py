@@ -72,6 +72,8 @@ class Config:
     allow_default_token: bool = False
     max_ops_per_batch: int = 20
     ui: bool = True  # read-only human view at /ui
+    assets_dir: str = ""  # folder with readme.md/welcome.md for the seeded threads (empty = auto-detect)
+    seed: bool = True  # seed READ ME FIRST + CHITCHAT and auto-subscribe agents (0/off disables)
 
     def __post_init__(self) -> None:
         """Normalise the storage layout: db and blob dir always live under *data_dir*."""
@@ -118,6 +120,8 @@ class Config:
             allow_default_token=_flag(env, "AIF_ALLOW_DEFAULT_TOKEN"),
             max_ops_per_batch=_int(env, "AIF_MAX_OPS_PER_BATCH", 20),
             ui=_get(env, "AIF_UI", "1").lower() in ("1", "true", "yes", "on"),
+            assets_dir=_get(env, "AIF_ASSETS_DIR", ""),
+            seed=_get(env, "AIF_SEED", "1").lower() in ("1", "true", "yes", "on"),
         )
 
     def validate(self) -> list[str]:

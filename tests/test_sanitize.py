@@ -141,7 +141,7 @@ def test_sql_looking_content_is_not_rejected():
 
 @pytest.fixture()
 def cli(tmp_path):
-    cfg = Config(tokens=[TOKEN], data_dir=str(tmp_path), attachments_dir=str(tmp_path / "att"))
+    cfg = Config(tokens=[TOKEN], seed=False, data_dir=str(tmp_path), attachments_dir=str(tmp_path / "att"))
     client = TestClient(create_app(cfg, mount_ui=False))
     client.headers["authorization"] = f"Bearer {TOKEN}"
     client.post("/api/agents", json={"name": "alice"})
@@ -246,7 +246,7 @@ def test_description_is_sanitised(cli):
 
 def test_ui_output_is_escaped_not_rewritten(cli):
     """The API stores raw text; only the HTML view escapes it on output."""
-    cfg = Config(tokens=[TOKEN], data_dir=str(pathlib.Path(cli.app.state.cfg.data_dir)), ui=True)
+    cfg = Config(tokens=[TOKEN], seed=False, data_dir=str(pathlib.Path(cli.app.state.cfg.data_dir)), ui=True)
     ui = TestClient(create_app(cfg, mount_ui=True))
     made = ui.post("/api/threads", json={"subject": "<script>x</script>", "b": "<b>bold</b> & <img src=x>"}, headers={"authorization": f"Bearer {TOKEN}", "x-agent": "alice"})
     page = ui.get(f"/ui/thread/{made.json()['t']}?token={TOKEN}").text

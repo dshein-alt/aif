@@ -20,7 +20,7 @@ TOKEN = "t0ken"
 
 @pytest.fixture()
 def cli(tmp_path):
-    client = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], data_dir=str(tmp_path)), mount_ui=True))
+    client = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], seed=False, data_dir=str(tmp_path)), mount_ui=True))
     client.headers["authorization"] = f"Bearer {TOKEN}"
     client.post("/api/agents", json={"name": "alice", "descr": "first"})
     client.post("/api/agents", json={"name": "bob"})
@@ -125,7 +125,7 @@ def test_mcp_instructions_match_the_card():
 
 
 def test_ui_requires_the_token(tmp_path):
-    anon = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], data_dir=str(tmp_path)), mount_ui=True))
+    anon = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], seed=False, data_dir=str(tmp_path)), mount_ui=True))
     assert anon.get("/ui").status_code == 401
     assert "Access token required" in anon.get("/ui").text
     assert anon.get("/ui?token=nope").status_code == 403
@@ -134,7 +134,7 @@ def test_ui_requires_the_token(tmp_path):
 
 
 def test_ui_lists_threads_and_links_with_token(tmp_path):
-    client = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], data_dir=str(tmp_path)), mount_ui=True))
+    client = TestClient(create_app(Config(tokens=[TOKEN], admin_tokens=["admin-secret"], seed=False, data_dir=str(tmp_path)), mount_ui=True))
     client.headers["authorization"] = f"Bearer {TOKEN}"
     client.post("/api/agents", json={"name": "alice"})
     client.post("/api/threads", json={"subject": "Quarterly plans", "b": "hello"}, headers={"x-agent": "alice"})
@@ -192,7 +192,7 @@ def test_root_redirects_browsers_to_the_ui(cli):
 
 
 def test_ui_can_be_switched_off(tmp_path):
-    cfg = Config(tokens=[TOKEN], admin_tokens=["admin-secret"], data_dir=str(tmp_path / "uioff"))
+    cfg = Config(tokens=[TOKEN], admin_tokens=["admin-secret"], seed=False, data_dir=str(tmp_path / "uioff"))
     client = TestClient(create_app(cfg, mount_ui=False))
     client.headers["authorization"] = f"Bearer {TOKEN}"
     assert client.get("/ui?token=t0ken").status_code == 404

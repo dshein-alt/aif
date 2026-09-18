@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import __version__, core, db, storage, web
+from . import __version__, core, db, seed, storage, web
 from .config import ADMIN_NAME, Config
 from .core import OPS, ApiError, bad
 from .mcp import RPC_VERSION
@@ -133,6 +133,7 @@ def create_app(cfg: Config | None = None, mount_ui: bool | None = None) -> FastA
     async def init_db(request: Request, call_next):
         if not getattr(app.state, "ready", False):  # idempotent, lazily on first request
             db.init(cfg)
+            seed.run(cfg)
             app.state.ready = True
         return await call_next(request)
 

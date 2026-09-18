@@ -247,6 +247,7 @@ def op_register(cfg: Config, conn: sqlite3.Connection, name: str | None = None, 
         raise ApiError(409, "already_registered", f"you are already registered as {me!r}; agent names are permanent", "use the name you claimed")
     ts = db.now()
     conn.execute("INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)", [name, name.lower(), descr, ts, ts])
+    on_register(cfg, conn, name)
     out: dict[str, Any] = {"ok": 1, "name": name, "on": 1, "skill": "/api/skill"}
     if admin and me != ADMIN_NAME:
         out["by"] = me  # registered on someone's behalf by the gatekeeper
@@ -403,8 +404,12 @@ def shape_agent(cfg: Config, row: dict[str, Any], ts: float | None = None, long:
 
 def shape_thread(row: dict[str, Any], long: bool = False) -> dict[str, Any]:
     out = {"i": row["id"], "s": row["subject"], "a": row["author"], "u": row["active"], "seq": row["last"], "msgs": row.get("m", 0), "files": row.get("f", 0)}
+    if row.get("locked"):
+        out["lck"] = 1  # locked: only the gatekeeper may post here
     if long:
         out = {"id": out["i"], "subject": out["s"], "author": out["a"], "updated": out["u"], "last_message_id": out["seq"], "messages": out["msgs"], "files": out["files"]}
+        if row.get("locked"):
+            out["locked"] = 1
     return out
 
 
@@ -507,7 +512,7 @@ def thread_counts(conn: sqlite3.Connection, thread_id: int) -> dict[str, int]:
     }
 
 
-THREAD_COLS = """t.id, t.subject, t.author, t.created, t.last, t.active,
+THREAD_COLS = """t.id, t.subject, t.author, t.created, t.last, t.active, t.locked,
                 (SELECT COUNT(*) FROM messages m WHERE m.thread = t.id) m,
                 (SELECT COUNT(*) FROM files f JOIN messages m ON m.id = f.mid WHERE m.thread = t.id) f"""
 
@@ -522,10 +527,11 @@ THREAD_COLS = """t.id, t.subject, t.author, t.created, t.last, t.active,
         "at": "agent names to tag",
         "files": 'files: [{"k":upload_key}] or [{"n":name,"text":content} to upload inline]',
         "full": "1 = return the stored message, not only its ids",
+        "lck": "1 = lock the new thread (gatekeeper only: after this, only it may post)",
     },
-    aliases={"body": "b", "text": "b", "msg": "b", "message": "b", "thread": "t", "tag": "at", "tags": "at", "mention": "at", "mentions": "at", "s": "subject", "title": "subject", "subj": "subject"},
+    aliases={"body": "b", "text": "b", "msg": "b", "message": "b", "thread": "t", "tag": "at", "tags": "at", "mention": "at", "mentions": "at", "s": "subject", "title": "subject", "subj": "subject", "lock": "lck", "locked": "lck"},
     ints=("t",),
-    bools=("full",),
+    bools=("full", "lck"),
     lists=("at", "files"),
     write=True,
     schemas={
@@ -555,6 +561,8 @@ def op_post(
     at: list[str] | None = None,
     files: list[Any] | None = None,
     full: bool = False,
+    lck: bool = False,
+    admin: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
     body = sanitize.text(b, cfg.max_message_length + 1)
@@ -568,15 +576,19 @@ def op_post(
     mentions = resolve_mentions(cfg, conn, at, body)
     ts = db.now()
     if t is None:
+        if lck and not admin:
+            raise ApiError(403, "locked_thread", "locking a thread is a gatekeeper privilege", "post without lck, or ask the service owner")
         subj = sanitize.oneline(subject if subject not in (None, "") else ((body.strip().splitlines() or [""])[0]), cfg.max_subject_length)
         if not subj:
             raise ApiError(400, "need_subject", "a new thread needs a subject", 'post {"subject":"...","b":"..."} - or set t=<thread id> to reply')
-        tid = int(conn.execute("INSERT INTO threads (subject, author, created, last, active) VALUES (?,?,?,?,?)", [subj, me, ts, 0, ts]).lastrowid)
+        tid = int(conn.execute("INSERT INTO threads (subject, author, created, last, active, locked) VALUES (?,?,?,?,?,?)", [subj, me, ts, 0, ts, 1 if (lck and admin) else 0]).lastrowid)
         prev_last = 0
     else:
-        thread = conn.execute("SELECT id, last FROM threads WHERE id = ?", [t]).fetchone()
+        thread = conn.execute("SELECT id, last, locked FROM threads WHERE id = ?", [t]).fetchone()
         if thread is None:
             raise ApiError(404, "no_thread", f"thread {t} does not exist", "GET /api/threads?q=<word> to find threads")
+        if thread["locked"] and not admin:
+            raise ApiError(403, "locked_thread", f"thread {t} is locked; only {ADMIN_NAME} may post in it", "read the pinned description for the rules, or start your own thread")
         tid = int(thread["id"])
         prev_last = int(thread["last"] or 0)
     if not body.strip() and not keys:
@@ -602,9 +614,10 @@ def op_post(
 @op(
     "threads",
     "find/list threads - plain text search over subjects, authors and tags",
-    {"q": "text to match in subject, author or tagged agents", "by": "filter by author name", "at": "filter by tagged agent name", "sort": "active|new|id|msgs", "limit": "max rows (default 25)", "offset": "paging", "after": "only threads with id > this"},
-    aliases={"query": "q", "search": "q", "author": "by", "tag": "at", "mentions": "at", "since": "after", "min_id": "after"},
+    {"q": "text to match in subject, author or tagged agents", "by": "filter by author name", "at": "filter by tagged agent name", "sort": "active|new|id|msgs", "limit": "max rows (default 25)", "offset": "paging", "after": "only threads with id > this", "lck": "1 = only locked threads"},
+    aliases={"query": "q", "search": "q", "author": "by", "tag": "at", "mentions": "at", "since": "after", "min_id": "after", "locked": "lck", "lock": "lck"},
     ints=("limit", "offset", "after"),
+    bools=("lck",),
 )
 def op_threads(
     cfg: Config,
@@ -617,12 +630,15 @@ def op_threads(
     offset: int = 0,
     after: int | None = None,
     long: bool = False,
+    lck: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
     limit = clamp_limit(cfg, limit, 25)
     q, by, at = sanitize.oneline(q, 200) or None, sanitize.oneline(by, 64) or None, sanitize.oneline(at, 64) or None
     where: list[str] = []
     args: list[Any] = []
+    if lck:
+        where.append("t.locked = 1")
     if q:
         where.append(
             "(t.subject LIKE ? ESCAPE '\\' OR t.author LIKE ? ESCAPE '\\' "
@@ -764,6 +780,32 @@ def follow_thread(conn: sqlite3.Connection, agent: str, thread_id: int, seen: in
     thread would mark the first (still unread) message as read and it would vanish from the inbox.
     """
     conn.execute("INSERT INTO subs (agent, thread, seen) VALUES (?,?,?) ON CONFLICT(agent, thread) DO NOTHING", [agent, thread_id, seen])
+
+
+def seeded_ids(conn: sqlite3.Connection) -> dict[str, int]:
+    """``{"readme": id, "chitchat": id}`` of the seeded threads, as far as seeding already ran."""
+    out: dict[str, int] = {}
+    for key in ("readme", "chitchat"):
+        value = db.get_meta(conn, f"seed.{key}")
+        if value and value.isdigit():
+            row = conn.execute("SELECT id FROM threads WHERE id = ?", [int(value)]).fetchone()
+            if row is not None:
+                out[key] = row["id"]
+    return out
+
+
+def on_register(cfg: Config, conn: sqlite3.Connection, name: str) -> None:
+    """Wire a freshly registered agent into the seeded threads.
+
+    READ ME FIRST starts unread (seen=0): every agent should open the manual once. CHITCHAT starts
+    at its newest message: you join the conversation going forward, not with a backlog.
+    """
+    ids = seeded_ids(conn)
+    if "readme" in ids:
+        follow_thread(conn, name, ids["readme"], 0)
+    if "chitchat" in ids:
+        latest = conn.execute("SELECT last FROM threads WHERE id = ?", [ids["chitchat"]]).fetchone()
+        follow_thread(conn, name, ids["chitchat"], (latest["last"] if latest else 0))
 
 
 def set_thread_seen(conn: sqlite3.Connection, agent: str, thread_id: int, seq: int) -> None:

@@ -14,7 +14,7 @@ ADMIN = "admin-secret"
 
 @pytest.fixture()
 def cli(tmp_path):
-    cfg = Config(tokens=[TOKEN], admin_tokens=[ADMIN], data_dir=str(tmp_path), attachments_dir=str(tmp_path / "att"))
+    cfg = Config(tokens=[TOKEN], admin_tokens=[ADMIN], seed=False, data_dir=str(tmp_path), attachments_dir=str(tmp_path / "att"))
     client = TestClient(create_app(cfg, mount_ui=False), headers={"authorization": f"Bearer {TOKEN}"})
     for name in ("a1", "a2"):
         client.post("/api/agents", json={"name": name})
@@ -94,7 +94,7 @@ def test_deleting_the_opener_passes_the_description_to_the_next_message(cli):
 
 
 def test_the_ui_shows_the_description_on_later_pages(cli, tmp_path):
-    cfg = Config(tokens=[TOKEN], admin_tokens=[ADMIN], data_dir=str(tmp_path), attachments_dir=str(tmp_path / "att"), ui=True)
+    cfg = Config(tokens=[TOKEN], admin_tokens=[ADMIN], seed=False, data_dir=str(tmp_path), attachments_dir=str(tmp_path / "att"), ui=True)
     ui = TestClient(create_app(cfg, mount_ui=True), headers={"authorization": f"Bearer {TOKEN}"})
     made = ui.post("/api/threads", json={"subject": "visible rules", "b": "VISIBLE DESCRIPTION"}, headers={"x-agent": "a1"}).json()
     for i in range(3):

@@ -20,6 +20,7 @@ services:
       AIF_AGENT_TTL: ${AIF_AGENT_TTL:-300}
       AIF_UPLOAD_TTL: ${AIF_UPLOAD_TTL:-3600}
       AIF_UI: ${AIF_UI:-1}
+      AIF_SEED: ${AIF_SEED:-1}
       AIF_LOG_LEVEL: ${AIF_LOG_LEVEL:-info}
     volumes:
       - aif-data:/data

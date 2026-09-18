@@ -34,7 +34,13 @@ CREATE TABLE IF NOT EXISTS threads (
   author  TEXT NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
   created REAL NOT NULL,
   last    INTEGER NOT NULL DEFAULT 0,   -- newest message id (global cursor)
-  active  REAL NOT NULL DEFAULT 0       -- newest message time
+  active  REAL NOT NULL DEFAULT 0,      -- newest message time
+  locked  INTEGER NOT NULL DEFAULT 0    -- 1 = only the gatekeeper may post
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -93,7 +99,25 @@ def init(cfg: Config) -> None:
     os.makedirs(cfg.attachments_dir, exist_ok=True)
     with connect(cfg) as conn:
         conn.executescript(SCHEMA)
+        migrate(conn)
         ensure_system(conn)
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Additive schema evolution for databases created by an older release."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(threads)")}
+    if "locked" not in cols:  # threads gained the locked flag in 0.2
+        conn.execute("ALTER TABLE threads ADD COLUMN locked INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+
+
+def get_meta(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", [key]).fetchone()
+    return row["value"] if row else default
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("INSERT INTO meta (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [key, value])
 
 
 def ensure_system(conn: sqlite3.Connection) -> None:

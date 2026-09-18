@@ -19,6 +19,8 @@ from fastapi.responses import HTMLResponse, Response
 from .config import Config
 from .core import ApiError
 
+LOCK = "\U0001f512 "  # prefix marking a locked thread in lists and titles
+
 CSS = """
 :root{color-scheme:light dark}
 body{font:15px/1.5 system-ui,sans-serif;margin:0 auto;padding:1rem;max-width:60rem;background:#fbfbfd;color:#16181d}
@@ -131,7 +133,7 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
         threads = data.get("th", [])
         rows = "".join(
             f"<tr><td class=n>{t['i']}</td>"
-            f'<td><a href="{link(tok, "/ui/thread/" + str(t["i"]))}">{html.escape(t["s"])}</a>'
+            f'<td><a href="{link(tok, "/ui/thread/" + str(t["i"]))}">{(LOCK if t.get("lck") else "") + html.escape(t["s"])}</a>'
             f'<div class=meta>{html.escape(t["a"])} · {stamp(t.get("created"))}</div></td>'
             f"<td class=n>{t.get('msgs', 0)}</td><td class=n>{t.get('files', 0)}</td>"
             f"<td class=n title='{stamp(t.get('u'))}'>{ago(t.get('u'), time.time())}</td></tr>"
@@ -194,7 +196,7 @@ def router(cfg: Config, call: Callable[..., Any]) -> APIRouter:
                 f"<div class=body>{body_html(pin.get('b', ''))}</div></div>"
             )
         body = (
-            f"<h2>{html.escape(data['s'])}</h2>"
+            f"<h2>{LOCK if data.get('lck') else ''}{html.escape(data['s'])}</h2>"
             f"<p class=meta>thread #{data['i']} · opened by {html.escape(data['a'])} · {data.get('msgs', 0)} messages, "
             f"{data.get('files', 0)} files · last activity {ago(data.get('u'), time.time())}</p>"
             f"{pinned}{''.join(parts) or '<p class=meta>No messages on this page.</p>'}{nav}"

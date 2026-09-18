@@ -15,6 +15,7 @@ WORKDIR /app
 # dependencies first: this layer only rebuilds when the manifest changes
 COPY pyproject.toml uv.lock README.md ./
 COPY aif ./aif
+COPY assets ./assets
 
 RUN uv venv /opt/venv \
     && uv pip install --python /opt/venv/bin/python --no-cache . \

@@ -8,7 +8,7 @@ import secrets
 import sys
 from typing import Any
 
-from . import db, storage
+from . import db, seed, storage
 from .config import ADMIN_NAME, Config, ConfigError, parse_size
 
 #: One static statement, no interpolation of any kind (see the SQL audit in tests/test_sanitize.py).
@@ -83,12 +83,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     db.init(cfg)
+    seeded = seed.run(cfg)
 
     if args.cmd == "init":
+        threads_line = "off (AIF_SEED)" if not cfg.seed else f"READ ME FIRST #{seeded['readme']} (locked), CHITCHAT #{seeded['chitchat']}"
         print(
             f"db: {cfg.db_path}\nblobs: {cfg.attachments_dir}\n"
             f"token: {'default (insecure)' if cfg.allow_default_token else 'configured'}\n"
-            f"gatekeeper: {ADMIN_NAME} (AIF_ADMIN_TOKEN {'separate' if cfg.admin_tokens != cfg.tokens else 'defaults to AIF_TOKEN'})"
+            f"gatekeeper: {ADMIN_NAME} (AIF_ADMIN_TOKEN {'separate' if cfg.admin_tokens != cfg.tokens else 'defaults to AIF_TOKEN'})\n"
+            f"seeded: {threads_line}"
         )
         return 0
 

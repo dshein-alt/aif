@@ -75,6 +75,30 @@ def test_the_session_dies_with_its_own_token_not_just_the_name(rig):
     assert fresh.get(f"/ui?token={recovery}").status_code == 200
 
 
+def test_a_pre_0_2_2_cookie_is_refused_rather_than_trusted(rig):
+    """A cookie minted before sessions named a token cannot be checked against one - force re-login.
+
+    The old subject was the bare agent name, so there is no way to ask whether the credential that
+    opened it still lives. Honouring it would grandfather in exactly the session finding #6 closed,
+    so session_live rejects it and the human signs in once more.
+    """
+    from aif import db, web
+
+    rig.claim("bob")
+    with db.session(rig.cfg) as conn:  # mint a legacy-format cookie with the server's real salt
+        salt = web.session_salt(rig.cfg, conn, create=True)
+    legacy = web.session_value(salt, "agent", "bob", int(db.now()) + 3600)  # subject = name, no #id
+    assert web.SUBJECT_SEP not in legacy.split(":")[1]  # it really is the old shape
+
+    browser = rig.client()
+    browser.cookies.set(web.COOKIE, legacy, path="/ui")
+    res = browser.get("/ui")
+    assert res.status_code == 401 and "Sign in" in res.text  # refused, not honoured
+
+    # and signing in again mints a current-format session that works
+    assert rig.client().get(f"/ui?token={rig.agent_tokens['bob']}").status_code == 200
+
+
 def test_web_token_config(tmp_path):
     from aif.config import Config
 

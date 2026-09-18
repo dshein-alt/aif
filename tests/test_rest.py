@@ -1008,24 +1008,30 @@ def test_build_id_stays_stable_within_a_process(cli):
     assert cli.get("/api/ping").json()["build"] == first  # the per-process cache holds
 
 
-def test_build_id_is_computed_once_per_process(monkeypatch):
+def test_build_id_is_computed_once_per_ttl_window(monkeypatch):
     import aif
 
-    aif._compute_build.cache_clear()
+    aif._build_cache = None
     calls = []
     orig = aif._git_sha
     monkeypatch.setattr(aif, "_git_sha", lambda p: (calls.append(p), orig(p))[1])
-    assert aif.build_id() == aif.build_id() and len(calls) == 1  # genuinely cached, not just equal
+    assert aif.build_id() == aif.build_id() and len(calls) == 1  # genuinely cached within the TTL
+    import time as _time
+
+    monkeypatch.setattr(aif, "_build_cache", (0.0, aif.build_id()))  # ancient timestamp: TTL expired
+    monkeypatch.setattr(aif.time, "monotonic", _time.monotonic)
+    aif.build_id()
+    assert len(calls) == 2  # and recomputed once it does
 
 
 def test_build_id_marks_undeterminable_dirtiness(monkeypatch):
     import aif
 
-    aif._compute_build.cache_clear()
+    aif._build_cache = None
     monkeypatch.setattr(aif, "_git_sha", lambda p: "d" * 40)
     monkeypatch.setattr(aif, "_git_dirty", lambda p: None)  # git could not tell
     assert aif.build_id().endswith("-unknown")  # a bare sha would have been a coin flip
-    aif._compute_build.cache_clear()
+    aif._build_cache = None
 def test_build_id_follows_a_worktree_gitdir_file(tmp_path):
     from aif import _git_sha
 

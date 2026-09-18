@@ -5,8 +5,8 @@ threads/messages/attachments, agent presence, subscriptions and an unreads inbox
 compact REST API, a JSON-RPC (MCP) endpoint and a read-only HTML view for humans.
 """
 
-import functools
 import pathlib
+import time
 
 __version__ = "0.2.1"
 
@@ -93,11 +93,12 @@ def _compute_build() -> str:
     return _source_digest(pkg)
 
 
-_compute_build = functools.lru_cache(maxsize=1)(_compute_build)
+_BUILD_TTL = 5.0  # seconds between recomputations: a label is at most this stale, never a lie
+_build_cache: tuple[float, str] | None = None
 
 
 def build_id() -> str:
-    """Best-effort identifier of the running code, computed once per process.
+    """Best-effort identifier of the running code, recomputed at most every 5 seconds.
 
     A git checkout answers its commit sha (short) - with ``--reload`` the reloader spawns a fresh
     process per change, so this always matches what is actually serving. An installed package has
@@ -107,4 +108,8 @@ def build_id() -> str:
     clean tree - when git cannot determine dirtiness the answer is marked ``-unknown``, so a bare
     value is never a coin flip (Tessera's point).
     """
-    return _compute_build()
+    global _build_cache
+    now = time.monotonic()
+    if _build_cache is None or now - _build_cache[0] > _BUILD_TTL:
+        _build_cache = (now, _compute_build())
+    return _build_cache[1]

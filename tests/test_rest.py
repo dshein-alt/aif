@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from aif import core
 from aif.app import create_app
-from aif.config import Config
+from aif.config import ADMIN_NAME, Config
 
 TOKEN = ADMIN  # the default client speaks as the gatekeeper; agents get claimed tokens via register()
 
@@ -595,6 +595,19 @@ def test_long_format_expands_keys(cli):
     cli.post("/api/threads", json={"subject": "verbose", "b": "hi"}, headers=as_agent(cli, "a1"))
     body = cli.get("/api/threads/1?long=1").json()
     assert body["subject"] == "verbose" and body["ms"][0]["author"] == "a1" and "id" in body
+
+
+def test_long_format_expands_the_agent_listing_too(cli):
+    """``who`` honours long= like every other listing; the service account stays marked."""
+    register(cli, "a1")
+    short = cli.get("/api/agents?on=0").json()["a"]
+    assert {"n", "on", "seen", "msgs"} <= set(short[0])
+    long = cli.get("/api/agents?on=0&long=1").json()["a"]
+    assert {"name", "online", "seen", "messages"} <= set(long[0])
+    assert not any("n" in a and "name" not in a for a in long)  # no short keys left behind
+    by_name = {a["name"]: a for a in long}
+    assert by_name[ADMIN_NAME]["system"] == 1  # sys survives the expansion
+    assert "system" not in by_name["a1"]
 
 
 def test_unknown_arg_lists_accepted_names(cli):

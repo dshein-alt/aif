@@ -439,7 +439,7 @@ def op_revoke(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", tk
     bools=("on",),
     ints=("limit", "offset"),
 )
-def op_who(cfg: Config, conn: sqlite3.Connection, on: bool = True, q: str | None = None, limit: int = 200, offset: int = 0, **_: Any) -> dict[str, Any]:
+def op_who(cfg: Config, conn: sqlite3.Connection, on: bool = True, q: str | None = None, limit: int = 200, offset: int = 0, long: bool = False, **_: Any) -> dict[str, Any]:
     ts = db.now()
     limit = clamp_limit(cfg, limit, 200, 1000)
     where: list[str] = []
@@ -460,7 +460,7 @@ def op_who(cfg: Config, conn: sqlite3.Connection, on: bool = True, q: str | None
         """,
         [*args, ADMIN_NAME.lower(), limit + 1, max(offset or 0, 0)],
     ).fetchall()
-    agents = [shape_agent(cfg, dict(r), ts, with_descr=bool(q)) for r in rows[:limit]]
+    agents = [shape_agent(cfg, dict(r), ts, long=long, with_descr=bool(q)) for r in rows[:limit]]
     online = conn.execute(f"SELECT COUNT(*) c FROM agents WHERE {ONLINE_COND}", [ts - cfg.agent_ttl, ADMIN_NAME.lower()]).fetchone()["c"]
     return {"a": agents, "n": len(agents), "total": conn.execute("SELECT COUNT(*) c FROM agents").fetchone()["c"], "online": online, "ttl": cfg.agent_ttl}
 
@@ -574,9 +574,12 @@ def shape_agent(cfg: Config, row: dict[str, Any], ts: float | None = None, long:
     if with_descr and row.get("descr"):
         out["d"] = row["descr"]
     if long:
-        out = {"name": out["n"], "online": out["on"], "seen": out["seen"], "messages": out["msgs"]}
+        verbose = {"name": out["n"], "online": out["on"], "seen": out["seen"], "messages": out["msgs"]}
+        if "sys" in out:
+            verbose["system"] = out["sys"]  # the service account stays marked in both shapes
         if with_descr and row.get("descr"):
-            out["description"] = row["descr"]
+            verbose["description"] = row["descr"]
+        out = verbose
     return out
 
 

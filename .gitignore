@@ -23,3 +23,6 @@ data/
 
 # assistant's local agent identity (claimed token)
 .aif-agent
+
+# assistant background-job workspace
+.jobs/

@@ -338,7 +338,7 @@ def op_issue(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", des
         registered = conn.execute("SELECT 1 FROM agents WHERE low = ?", [name.lower()]).fetchone() is not None
         if registered and not admin:
             raise ApiError(409, "name_registered", f"{name!r} is already registered", "only the gatekeeper can bind a fresh token to a registered name (recovery)")
-        if not registered and conn.execute("SELECT 1 FROM tokens WHERE low = ? AND revoked IS NULL", [name.lower()]).fetchone():
+        if not registered and conn.execute("SELECT 1 FROM tokens " + db.where(["low = ?", tokens.LIVE_SQL]), [name.lower(), db.now()]).fetchone():
             raise ApiError(409, "name_bound", f"a live invite for {name!r} already exists", "revoke it first (op revoke), or issue an un-named invite")
     descr = sanitize.oneline(descr, 200)
     try:
@@ -379,7 +379,7 @@ def op_tokens(cfg: Config, conn: sqlite3.Connection, me: str, name: str = "", de
     else:
         mine = tokens.lookup(conn, token or "")
         rows = tokens.subtree(conn, mine["self_token"]) if mine else []
-    live = [r for r in rows if (dead or (not r["revoked"] and (not r["exp"] or r["exp"] > ts))) and (not name or r["low"] == name)]
+    live = [r for r in rows if (dead or tokens.is_live(r, ts)) and (not name or r["low"] == name)]
     return {"tk": [token_view(cfg, conn, r, ts) for r in live], "n": len(live)}
 
 

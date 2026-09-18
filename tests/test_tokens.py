@@ -178,3 +178,39 @@ def test_clients_cannot_inject_privilege_context(rig):
     assert sneaky.post("/api/op", json={"do": "revoke", "name": "gatekeeper"}).status_code == 404
     res = sneaky.post("/api/op", json={"do": "register", "name": "second", "claim": "aif_forged"})
     assert res.status_code == 409 and res.json()["err"] == "already_registered"  # the claim arg was dropped, not used
+
+
+# --------------------------------------------------------------------- liveness (finding #2)
+
+
+def test_an_expired_invite_does_not_block_reissue(rig):
+    """Finding #2 (Claudius): the issue guard used to test only `revoked`, not `exp`."""
+    first = rig.issue("frank")
+    with db.session(rig.cfg) as conn:
+        conn.execute("UPDATE tokens SET exp = 1 WHERE self_token = ?", [first])  # force-expire it
+    hidden = rig.admin.post("/api/op", json={"do": "tokens"}).json()
+    assert all(t["name"] != "frank" for t in hidden["tk"])  # dead rows stay out of the listing
+    again = rig.admin.post("/api/op", json={"do": "issue", "name": "frank"})
+    assert again.status_code == 200 and again.json()["token"] != first  # and re-issue works anyway
+    visible = rig.admin.post("/api/op", json={"do": "tokens", "dead": 1}).json()
+    assert sum(t["name"] == "frank" for t in visible["tk"]) == 2  # dead=1 still shows history
+
+
+def test_revoke_by_name_still_finds_an_expired_row(rig):
+    """The escape hatch from finding #2 must keep working: revoke uses the wider filter."""
+    invite = rig.issue("grace")
+    with db.session(rig.cfg) as conn:
+        conn.execute("UPDATE tokens SET exp = 1 WHERE self_token = ?", [invite])
+    gone = rig.admin.post("/api/op", json={"do": "revoke", "name": "grace"})
+    assert gone.status_code == 200 and gone.json()["revoked"] == 1
+
+
+def test_liveness_helpers_agree(rig):
+    db.init(rig.cfg)  # no request was made yet: create the schema explicitly
+    with db.session(rig.cfg) as conn:
+        conn.execute("UPDATE tokens SET exp = 1 WHERE exp > 0 AND exp < 100")
+        rows = [dict(r) for r in conn.execute("SELECT * FROM tokens")]
+        ts = db.now()
+        sql = {r["self_token"] for r in conn.execute("SELECT * FROM tokens WHERE " + tokens.LIVE_SQL, [ts])}
+        py = {r["self_token"] for r in rows if tokens.is_live(r, ts)}
+    assert sql == py  # one definition, two surfaces

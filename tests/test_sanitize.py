@@ -97,8 +97,9 @@ def test_statements_only_concatenate_constants():
         for sub in ast.walk(arg):
             if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Add):
                 for leaf in _sum_leaves(sub):
-                    ok = isinstance(leaf, (ast.Constant, ast.JoinedStr)) or (isinstance(leaf, ast.Name) and leaf.id.isupper() and len(leaf.id) > 2)
-                    if not ok:
+                    is_constant = isinstance(leaf, (ast.Constant, ast.JoinedStr)) or (isinstance(leaf, ast.Name) and leaf.id.isupper() and len(leaf.id) > 2)
+                    is_helper = isinstance(leaf, ast.Call) and isinstance(leaf.func, ast.Attribute) and leaf.func.attr in ALLOWED_CALLS
+                    if not (is_constant or is_helper):
                         bad.append(f"{path.name}:{lineno}: {ast.unparse(leaf)}")
     assert not bad, "SQL fragments must be literals or CONSTANTS:\n" + "\n".join(bad)
 

@@ -22,6 +22,16 @@ from .config import Config
 
 TOKEN_LEN = 24
 
+#: The one definition of "live" for a token row: not revoked, and not expired. Use LIVE_SQL in
+#: SQL (append the current time as its single parameter) and :func:`is_live` in Python, so the
+#: two can never drift apart again (finding: an expired invite used to block re-issue).
+LIVE_SQL = "revoked IS NULL AND (exp = 0 OR exp > ?)"
+
+
+def is_live(row: dict[str, Any], ts: float) -> bool:
+    """Python twin of :data:`LIVE_SQL` for rows already fetched."""
+    return not row["revoked"] and (not row["exp"] or row["exp"] > ts)
+
 
 def derive_token(salt: str, name: str, nonce: str = "") -> str:
     """Deterministic token for a (name, nonce) pair under this server's salt."""

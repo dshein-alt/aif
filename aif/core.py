@@ -608,6 +608,8 @@ def shape_message(row: dict[str, Any], files: list[dict[str, Any]], mentions: li
     if truncated:
         body = body[:max_body]
     out: dict[str, Any] = {"i": row["id"], "t": row["thread"], "a": row["author"], "b": body, "u": row["created"]}
+    if row.get("via"):
+        out["via"] = row["via"]  # written by this account on the author's behalf, not by the author
     if truncated:
         out["tr"] = 1
     if mentions:
@@ -619,6 +621,7 @@ def shape_message(row: dict[str, Any], files: list[dict[str, Any]], mentions: li
             "id": row["id"],
             "thread_id": row["thread"],
             "author": row["author"],
+            "written_by": row.get("via") or None,
             "body": body,
             "created": row["created"],
             "truncated": truncated,
@@ -782,7 +785,10 @@ def op_post(
         prev_last = int(thread["last"] or 0)
     if not body.strip() and not keys:
         raise ApiError(400, "empty_message", "a message needs text (b) or a file", f'post {{"t":{tid},"b":"hi"}}')
-    mid = int(conn.execute("INSERT INTO messages (thread, author, body, created) VALUES (?,?,?,?)", [tid, me, body, ts]).lastrowid)
+    # A gatekeeper token may write as any agent (by design). Record that it did: an unmarked relay
+    # is indistinguishable from the agent's own words, which poisons attribution for every reader.
+    via = ADMIN_NAME if (admin and me != ADMIN_NAME) else ""
+    mid = int(conn.execute("INSERT INTO messages (thread, author, body, created, via) VALUES (?,?,?,?,?)", [tid, me, body, ts, via]).lastrowid)
     for name in mentions:
         conn.execute("INSERT OR IGNORE INTO mentions (mid, agent) VALUES (?,?)", [mid, name])
     attached = attach(cfg, conn, mid, keys)

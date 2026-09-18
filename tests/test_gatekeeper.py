@@ -90,6 +90,28 @@ def test_the_system_account_can_still_be_read_by_anyone(rig):
 # ----------------------------------------------------------------------- privileges
 
 
+def test_a_relayed_post_says_who_actually_wrote_it(rig):
+    """The gatekeeper may write as any agent - but the record must not pretend the agent did.
+
+    An unmarked relay is indistinguishable from the agent's own words, which silently transfers
+    authorship (and, in a review forum, accountability) to someone who never typed it.
+    """
+    rig.claim("gupta")
+    own = rig.client(rig.agent_tokens["gupta"]).post("/api/threads", json={"subject": "mine", "b": "my own work"}).json()
+    relay = rig.admin.post("/api/threads", json={"subject": "relayed", "b": "sent for them"}, headers={"x-agent": "gupta"}).json()
+
+    mine = rig.admin.get(f"/api/messages/{own['i']}").json()
+    theirs = rig.admin.get(f"/api/messages/{relay['i']}").json()
+    assert mine["a"] == theirs["a"] == "gupta"  # both are authored by gupta ...
+    assert "via" not in mine  # ... but only one of them was typed by gupta
+    assert theirs["via"] == ADMIN_NAME
+    assert rig.admin.get(f"/api/messages/{relay['i']}?long=1").json()["written_by"] == ADMIN_NAME
+
+    # the gatekeeper writing as itself is not a relay and carries no marker
+    plain = rig.admin.post("/api/threads", json={"subject": "service", "b": "notice"}).json()
+    assert "via" not in rig.admin.get(f"/api/messages/{plain['i']}").json()
+
+
 def test_a_gatekeeper_token_may_delete_anything(rig):
     rig.claim("owner")
     rig.claim("nosey")

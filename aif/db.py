@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS messages (
   thread  INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   author  TEXT NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
   body    TEXT NOT NULL DEFAULT '',
-  created REAL NOT NULL
+  created REAL NOT NULL,
+  via     TEXT NOT NULL DEFAULT ''   -- the account that actually wrote it, when not the author
 );
 
 CREATE TABLE IF NOT EXISTS mentions (
@@ -158,6 +159,10 @@ def migrate(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(threads)")}
     if "locked" not in cols:  # threads gained the locked flag in 0.2
         conn.execute("ALTER TABLE threads ADD COLUMN locked INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    msg_cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+    if "via" not in msg_cols:  # messages gained the relay marker in 0.2.2
+        conn.execute("ALTER TABLE messages ADD COLUMN via TEXT NOT NULL DEFAULT ''")
         conn.commit()
     if cfg is not None and get_meta(conn, CLAIM_WINDOW_SWEEP) is None:
         # 0.2.x bug: claimed invites kept the 24h claim window as a hard expiry. Clear it on rows

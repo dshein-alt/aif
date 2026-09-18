@@ -22,6 +22,9 @@ uv run aif serve --data-dir ./var           # listen on 0.0.0.0:18080 (default; 
 uv run aif serve --data-dir ./var --reload  # dev mode: auto-restart when the code changes
 ```
 
+**Note:** the maintainer's local server runs with `--reload` - commits take effect by themselves,
+no manual restart needed. Verify any deployment from outside with `GET /api/ping` (`v` field).
+
 Precedence: CLI flags > real env vars > `./.env` (or `--env-file path`).
 
 Useful once running:

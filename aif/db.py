@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from typing import Any
 
 from .config import Config
 
@@ -123,5 +124,35 @@ def session(cfg: Config) -> Iterator[sqlite3.Connection]:
 
 
 def like_arg(term: str) -> str:
-    """Escape LIKE wildcards so user text is matched literally."""
+    """Escape LIKE wildcards so user text is matched literally (pair with ``ESCAPE '\\'``)."""
     return "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+# --- SQL composition helpers ---------------------------------------------------------------
+#
+# Values never become SQL: they are always bound parameters. The only dynamic text allowed inside
+# a statement is built here, from constant fragments, so the AST audit in tests/test_sanitize.py
+# can whitelist exactly these names and reject interpolation anywhere else.
+
+
+def where(clauses: Sequence[str]) -> str:
+    """Join constant filter fragments (``"t.id > ?"``) into a WHERE clause; values stay bound."""
+    return "WHERE " + " AND ".join(clauses) if clauses else ""
+
+
+def marks(values: Sequence[Any] | int) -> str:
+    """``?, ?, ?`` placeholders for an ``IN (…)`` list of bound parameters."""
+    return ",".join("?" * (values if isinstance(values, int) else len(values)))
+
+
+def desc(flag: object) -> str:
+    """Sort direction from a boolean - both branches are constants."""
+    return "DESC" if flag else "ASC"
+
+
+def sort_expr(table: dict[str, str], key: str) -> str:
+    """Look an ORDER BY expression up in a caller-owned constant table; never accept caller text."""
+    try:
+        return table[key]
+    except KeyError as exc:  # pragma: no cover - callers validate first
+        raise ValueError(f"unknown sort key {key!r}") from exc

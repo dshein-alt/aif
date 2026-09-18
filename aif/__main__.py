@@ -11,6 +11,17 @@ from typing import Any
 from . import db, storage
 from .config import Config, ConfigError, parse_size
 
+#: One static statement, no interpolation of any kind (see the SQL audit in tests/test_sanitize.py).
+STATS_SQL = """
+SELECT 'agents' k, COUNT(*) c FROM agents UNION ALL
+SELECT 'subs', COUNT(*) FROM subs UNION ALL
+SELECT 'threads', COUNT(*) FROM threads UNION ALL
+SELECT 'messages', COUNT(*) FROM messages UNION ALL
+SELECT 'mentions', COUNT(*) FROM mentions UNION ALL
+SELECT 'files', COUNT(*) FROM files UNION ALL
+SELECT 'pending_uploads', COUNT(*) FROM files WHERE mid IS NULL
+"""
+
 
 def _config(args: argparse.Namespace) -> Config:
     env: dict[str, str] = dict(os.environ)
@@ -78,13 +89,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "stats":
         with db.reader(cfg) as conn:
-            counts: dict[str, Any] = {
-                table: conn.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]  # noqa: S608 - fixed table names
-                for table in ("agents", "subs", "threads", "messages", "mentions", "files")
-            }
-        counts["pending_uploads"] = conn_pending(cfg)
-        blobs = storage.stats(cfg)
-        counts["blob_bytes"] = blobs["bytes"]
+            counts: dict[str, Any] = {row["k"]: row["c"] for row in conn.execute(STATS_SQL)}
+        counts["blob_bytes"] = storage.stats(cfg)["bytes"]
         counts["db_bytes"] = os.path.getsize(cfg.db_path) if os.path.exists(cfg.db_path) else 0
         for key, value in counts.items():
             print(f"{key}={value}")
@@ -111,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def conn_pending(cfg: Config) -> int:
+def conn_pending(cfg: Config) -> int:  # pragma: no cover - kept for scripts
     with db.reader(cfg) as conn:
         return conn.execute("SELECT COUNT(*) c FROM files WHERE mid IS NULL").fetchone()["c"]
 

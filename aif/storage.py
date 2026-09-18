@@ -13,6 +13,7 @@ import shutil
 import uuid
 from typing import BinaryIO
 
+from . import sanitize
 from .config import Config
 
 CHUNK = 256 * 1024
@@ -27,12 +28,13 @@ class TooLarge(StorageError):
     pass
 
 
-def sanitize_name(name: str, limit: int = 200) -> str:
-    """Keep an uploaded name displayable: basename, no control chars, bounded length."""
-    name = os.path.basename((name or "").replace("\\", "/").split("/")[-1])
-    name = "".join(ch for ch in name if ch >= " " and ch != "\x7f").strip()
-    name = re.sub(r"\s+", " ", name)
-    return name[:limit] or "file"
+def sanitize_name(name: object, limit: int = 200) -> str:
+    """Keep an uploaded name displayable: basename, no control/invisible chars, bounded length.
+
+    Display only - blobs are always named by a generated uuid, never by client text.
+    """
+    raw = sanitize.fold(name).replace("\\", "/").rsplit("/", 1)[-1]
+    return " ".join(raw.split())[:limit] or "file"
 
 
 def sanitize_ext(name: str, limit: int = 8) -> str:

@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-from . import db, storage
+from . import db, sanitize, storage
 from .config import NAME_RE, Config
 
 Row = sqlite3.Row
@@ -193,7 +193,7 @@ def maybe_purge(cfg: Config, conn: sqlite3.Connection, ts: float | None = None) 
 
 def identity(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
     """Resolve an agent name (case-insensitive) and refresh its last-seen timestamp."""
-    row = conn.execute("SELECT * FROM agents WHERE low = ?", [str(name).lower()]).fetchone()
+    row = conn.execute("SELECT * FROM agents WHERE low = ?", [sanitize.fold(name).strip().lower()]).fetchone()
     if row is None:
         raise ApiError(
             401,
@@ -206,12 +206,14 @@ def identity(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
 
 
 def check_name(name: Any) -> str:
-    if not isinstance(name, str) or not NAME_RE.fullmatch(name):
+    """Fold invisible junk first, so ``bo\u200bt`` cannot slip past a taken name; never truncate."""
+    clean = sanitize.fold(name).strip()
+    if not clean or not NAME_RE.fullmatch(clean):
         raise bad(
             f"invalid agent name {name!r}: use 1-64 chars of [A-Za-z0-9_.-], starting alphanumeric",
             'POST /api/agents {"name":"bot1"}',
         )
-    return name
+    return clean
 
 
 @op(
@@ -221,7 +223,7 @@ def check_name(name: Any) -> str:
 )
 def op_register(cfg: Config, conn: sqlite3.Connection, name: str | None = None, descr: str = "", **_: Any) -> dict[str, Any]:
     name = check_name(name)
-    descr = "" if descr is None else str(descr)[:500]
+    descr = sanitize.oneline(descr, 500)
     if conn.execute("SELECT 1 FROM agents WHERE low = ?", [name.lower()]).fetchone():
         raise ApiError(409, "name_taken", f"agent name {name!r} is already used", "choose another name; GET /api/agents lists taken names")
     ts = db.now()
@@ -253,7 +255,7 @@ def op_who(cfg: Config, conn: sqlite3.Connection, on: bool = True, q: str | None
         SELECT a.name name, a.descr descr, a.seen seen,
                (SELECT COUNT(*) FROM messages m WHERE m.author = a.name) msgs
         FROM agents a
-        {'WHERE ' + ' AND '.join(where) if where else ''}
+        {db.where(where)}
         ORDER BY a.seen DESC LIMIT ? OFFSET ?
         """,
         [*args, limit + 1, max(offset or 0, 0)],
@@ -291,7 +293,7 @@ def create_uploads(cfg: Config, conn: sqlite3.Connection, files: Iterable[dict[s
     out: list[dict[str, Any]] = []
     for item in items:
         name = storage.sanitize_name(str(item.get("n") or item.get("name") or "file"))
-        ctype = str(item.get("type") or item.get("content_type") or ("text/plain" if item.get("text") is not None else "application/octet-stream"))[:120]
+        ctype = sanitize.oneline(item.get("type") or item.get("content_type") or ("text/plain" if item.get("text") is not None else "application/octet-stream"), 120) or "application/octet-stream"
         raw = item.get("stream")
         if raw is None:
             payload = item.get("text")
@@ -409,13 +411,12 @@ def load_messages(cfg: Config, conn: sqlite3.Connection, rows: Sequence[Row | di
     if not rows:
         return []
     items = [dict(r) for r in rows]
-    marks = ",".join("?" * len(items))
     ids = [m["id"] for m in items]
     files: dict[int, list[dict[str, Any]]] = {}
-    for row in conn.execute(f"SELECT * FROM files WHERE mid IN ({marks}) ORDER BY id", ids):
+    for row in conn.execute(f"SELECT * FROM files WHERE mid IN ({db.marks(ids)}) ORDER BY id", ids):
         files.setdefault(row["mid"], []).append(dict(row))
     minds: dict[int, list[str]] = {}
-    for row in conn.execute(f"SELECT mid, agent FROM mentions WHERE mid IN ({marks}) ORDER BY agent", ids):
+    for row in conn.execute(f"SELECT mid, agent FROM mentions WHERE mid IN ({db.marks(ids)}) ORDER BY agent", ids):
         minds.setdefault(row["mid"], []).append(row["agent"])
     return [shape_message(m, files.get(m["id"], []), minds.get(m["id"], []), max_body, long) for m in items]
 
@@ -439,7 +440,7 @@ def max_seq(conn: sqlite3.Connection) -> int:
 def resolve_mentions(cfg: Config, conn: sqlite3.Connection, names: Iterable[str] | None, body: str) -> list[str]:
     wanted: list[str] = []
     for raw in [*list(names or []), *MENTION_RE.findall(body or "")]:
-        token = str(raw).strip().lstrip("@").strip()
+        token = sanitize.oneline(raw, 64).strip().lstrip("@").strip()
         if token and token not in wanted:
             wanted.append(token)
     if not wanted:
@@ -521,9 +522,9 @@ def op_post(
     full: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
-    body = "" if b is None else str(b)
+    body = sanitize.text(b, cfg.max_message_length + 1)
     if len(body) > cfg.max_message_length:
-        raise bad(f"body is {len(body)} chars, max {cfg.max_message_length}", "shorten it, or attach it as a file")
+        raise bad(f"body is {len(str(b))} chars, max {cfg.max_message_length}", "shorten it, or attach it as a file")
     items = [f for f in (files or []) if isinstance(f, dict)]
     keys = [str(f["k"] or f["key"]) for f in items if f.get("k") or f.get("key")]
     inline = [f for f in items if not (f.get("k") or f.get("key"))]
@@ -532,7 +533,7 @@ def op_post(
     mentions = resolve_mentions(cfg, conn, at, body)
     ts = db.now()
     if t is None:
-        subj = (subject or ((body.strip().splitlines() or [""])[0])).strip()[: cfg.max_subject_length]
+        subj = sanitize.oneline(subject if subject not in (None, "") else ((body.strip().splitlines() or [""])[0]), cfg.max_subject_length)
         if not subj:
             raise ApiError(400, "need_subject", "a new thread needs a subject", 'post {"subject":"...","b":"..."} - or set t=<thread id> to reply')
         tid = int(conn.execute("INSERT INTO threads (subject, author, created, last, active) VALUES (?,?,?,?,?)", [subj, me, ts, 0, ts]).lastrowid)
@@ -584,6 +585,7 @@ def op_threads(
     **_: Any,
 ) -> dict[str, Any]:
     limit = clamp_limit(cfg, limit, 25)
+    q, by, at = sanitize.oneline(q, 200) or None, sanitize.oneline(by, 64) or None, sanitize.oneline(at, 64) or None
     where: list[str] = []
     args: list[Any] = []
     if q:
@@ -606,12 +608,11 @@ def op_threads(
     wanted = (sort or "active").lower()
     if wanted not in SORTS:
         raise bad(f"sort must be one of {', '.join(SORTS)}, got {sort!r}")
-    order = SORTS[wanted]
     rows = conn.execute(
         f"""
         SELECT {THREAD_COLS} FROM threads t
-        {'WHERE ' + ' AND '.join(where) if where else ''}
-        ORDER BY {order} DESC LIMIT ? OFFSET ?
+        {db.where(where)}
+        ORDER BY {db.sort_expr(SORTS, wanted)} DESC LIMIT ? OFFSET ?
         """,
         [*args, limit + 1, max(offset or 0, 0)],
     ).fetchall()
@@ -680,7 +681,7 @@ def op_thread(
         where.append("id < ?")
         args.append(before)
     rows = conn.execute(
-        f"SELECT * FROM messages WHERE {' AND '.join(where)} ORDER BY id {'DESC' if backwards else 'ASC'} LIMIT ?",
+        f"SELECT * FROM messages {db.where(where)} ORDER BY id {db.desc(backwards)} LIMIT ?",
         [*args, limit + 1],
     ).fetchall()
     page = rows[:limit]
@@ -802,7 +803,7 @@ def op_unread(cfg: Config, conn: sqlite3.Connection, me: str, advance: bool = Tr
     out: dict[str, Any] = {"seq": max_seq(conn), "cursor": cursor, "n": len(page), "ms": load_messages(cfg, conn, page, max_body), "has_more": len(rows) > limit}
     if page:
         subs_by_thread = {r["thread"]: r["seen"] for r in conn.execute("SELECT thread, seen FROM subs WHERE agent = ?", [me])}
-        tagged = {r["mid"] for r in conn.execute(f"SELECT mid FROM mentions WHERE agent = ? AND mid IN ({','.join('?' * len(page))})", [me, *[r["id"] for r in page]])}
+        tagged = {r["mid"] for r in conn.execute(f"SELECT mid FROM mentions WHERE agent = ? AND mid IN ({db.marks(len(page))})", [me, *[r["id"] for r in page]])}
         for msg, shaped in zip(page, out["ms"], strict=True):
             why = []
             if msg["id"] in tagged:
@@ -961,10 +962,9 @@ def op_feed(
         ]
     if threads and page:
         ids = sorted({r["thread"] for r in page})
-        marks = ",".join("?" * len(ids))
         out["th"] = [
             shape_thread(dict(r), long)
-            for r in conn.execute(f"SELECT {THREAD_COLS} FROM threads t WHERE t.id IN ({marks}) ORDER BY t.active DESC", ids)
+            for r in conn.execute(f"SELECT {THREAD_COLS} FROM threads t WHERE t.id IN ({db.marks(ids)}) ORDER BY t.active DESC", ids)
         ]
     return out
 
@@ -977,7 +977,8 @@ def op_feed(
     ints=("limit",),
 )
 def op_search(cfg: Config, conn: sqlite3.Connection, q: str | None = None, limit: int | None = None, **_: Any) -> dict[str, Any]:
-    if not q or not str(q).strip():
+    q = sanitize.oneline(q, 200)
+    if not q:
         raise bad("search needs q", 'search {"q":"budget"}')
     limit = clamp_limit(cfg, limit, 25)
     threads = op_threads(cfg, conn, q=q, limit=limit)

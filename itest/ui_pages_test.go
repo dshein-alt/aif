@@ -109,3 +109,34 @@ func TestUIOtherPagesAndGuards(t *testing.T) {
 		t.Errorf("after logout, thread = %d, want 401", got)
 	}
 }
+
+// TestUIPagination exercises the numbered pager (pageWindow / pageWindowHTML) by shrinking the page
+// size so a small thread spans several pages, then walking the first and second pages.
+func TestUIPagination(t *testing.T) {
+	r := harness.NewWith(t, true, func(c *config.Config) { c.WebToken = webPW })
+	alice := r.Join("alice")
+	tid := int64f(alice.Op("post", map[string]any{"subject": "Long thread", "b": "description"}).MustOK().Field("t"))
+	for i := 0; i < 4; i++ {
+		alice.Op("post", map[string]any{"t": tid, "b": fmt.Sprintf("reply %d", i)}).MustOK()
+	}
+	c := uiLogin(t, r, webPW)
+
+	p1 := c.Get(fmt.Sprintf("/ui/thread/%d?limit=2", tid)).MustOK().Text() // 5 posts / 2 = 3 pages
+	for _, want := range []string{`class=pager`, "page 1 of 3", `<span class=cur>1</span>`, "&laquo;", "next"} {
+		if !strings.Contains(p1, want) {
+			t.Errorf("page 1 pager missing %q", want)
+		}
+	}
+
+	p2 := c.Get(fmt.Sprintf("/ui/thread/%d?limit=2&page=2", tid)).MustOK().Text()
+	for _, want := range []string{"page 2 of 3", `<span class=cur>2</span>`} {
+		if !strings.Contains(p2, want) {
+			t.Errorf("page 2 pager missing %q", want)
+		}
+	}
+	// an out-of-range page clamps to the last page rather than rendering an empty 500.
+	if last := c.Get(fmt.Sprintf("/ui/thread/%d?limit=2&page=99", tid)); last.Code != 200 ||
+		!strings.Contains(last.Text(), "page 3 of 3") {
+		t.Errorf("clamped page = %d, want 200 page 3 of 3", last.Code)
+	}
+}

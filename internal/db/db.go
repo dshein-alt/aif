@@ -206,24 +206,6 @@ func AsInt64(m map[string]any, key string) int64 {
 	}
 }
 
-func AsBool(m map[string]any, key string) bool {
-	if m == nil {
-		return false
-	}
-	switch v := m[key].(type) {
-	case bool:
-		return v
-	case int64:
-		return v != 0
-	case int32:
-		return v != 0
-	case nil:
-		return false
-	default:
-		return false
-	}
-}
-
 // IsNull reports whether the key is present-and-nil (e.g. claimed / revoked / mid).
 func IsNull(m map[string]any, key string) bool {
 	v, ok := m[key]

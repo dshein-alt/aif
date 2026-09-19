@@ -104,8 +104,6 @@ func mapStr(v any, key string) string {
 	return fmt.Sprint(v)
 }
 
-func iToAny(n int) any { return int64(n) }
-
 // int64Default returns the integer value at m[key] (0 when absent or not a number).
 func int64Default(m map[string]any, key string) int64 {
 	n, _ := toInt64(m[key])

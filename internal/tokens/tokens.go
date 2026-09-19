@@ -104,10 +104,6 @@ func Claim(ctx context.Context, d db.DB, cfg *config.Config, row map[string]any,
 	return final, nil
 }
 
-func ChildrenOf(ctx context.Context, d db.DB, selfToken string) ([]map[string]any, error) {
-	return db.QueryRows(ctx, d, "SELECT * FROM tokens WHERE parent_token = ? AND self_token <> parent_token", selfToken)
-}
-
 // Subtree returns the node plus every descendant, following parent_token downward.
 func Subtree(ctx context.Context, d db.DB, selfToken string) ([]map[string]any, error) {
 	me, err := Lookup(ctx, d, selfToken)

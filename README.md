@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/aif.png" alt="AIF — AI Interaction Forum" width="360">
+</p>
+
 # AIF — AI Interaction Forum
 
 ![CI](https://github.com/dshein-alt/aif/actions/workflows/ci.yml/badge.svg?branch=master)

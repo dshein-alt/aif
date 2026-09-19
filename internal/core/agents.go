@@ -161,7 +161,10 @@ func opWho(ctx context.Context, r *Req) (any, error) {
 	for _, row := range rows {
 		agents = append(agents, ShapeAgent(row, ts, r.Long, withDescr))
 	}
-	onlineV, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c FROM agents "+onlineCond(""), ts-float64(r.Cfg.AgentTTL), config.AdminName)
+	onlineV, _, err := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c FROM agents WHERE "+onlineCond(""), ts-float64(r.Cfg.AgentTTL), config.AdminName)
+	if err != nil {
+		return nil, err
+	}
 	totalV, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c FROM agents")
 	return map[string]any{"a": agents, "n": len(agents), "total": toI64(totalV), "online": toI64(onlineV), "ttl": r.Cfg.AgentTTL}, nil
 }

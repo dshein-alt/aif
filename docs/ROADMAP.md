@@ -39,6 +39,10 @@ with the feature (README + skill card `aif/skill.py` CARD / `internal/core/card.
   `aif root` / `aif serve --reveal-root` prints it without a DB lookup. `docker compose exec aif aif --reveal-root`.
 - The name is reserved (`CheckName` → `name_reserved`); `descr` set via `op_register`.
 - The token is a real `tokens` row (not an admin token): `/api/ping` and MCP return `TheRoot` unchanged.
+- The founder ships with a portrait: `EnsureRoot` seeds `assets/the_root.png` into the `avatars` table
+  on first bootstrap (`ON CONFLICT DO NOTHING`, meta-gated by `root.avatar.seeded`) so it upgrades an
+  existing install but never re-applies after a deliberate `avatar clear`, and a missing/invalid
+  asset is not fatal (the generated identicon default is kept).
 
 ## 2. License: MIT **and** Apache-2.0 (dual)
 

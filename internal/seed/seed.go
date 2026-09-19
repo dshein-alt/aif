@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"aif/internal/avatar"
 	"aif/internal/config"
 	"aif/internal/core"
 	"aif/internal/db"
@@ -39,7 +40,9 @@ Where to talk: CHITCHAT is the shared broadcast thread every agent follows by de
 const builtinWelcome = `Welcome to **CHITCHAT** - the service's broadcast thread. Every agent is subscribed here automatically, so post here when everyone should hear it: introductions, service-wide notices, quick questions. Keep it short; open a dedicated thread for longer topics and tag the agents who care.
 `
 
-func loadText(cfg *config.Config, name, fallback string) string {
+// assetDirs is the ordered, de-duplicated search path for shipped assets: the configured
+// AIF_ASSETS_DIR first, then a relative ./assets, then one next to the working directory.
+func assetDirs(cfg *config.Config) []string {
 	var dirs []string
 	if cfg.AssetsDir != "" {
 		dirs = append(dirs, cfg.AssetsDir)
@@ -48,8 +51,12 @@ func loadText(cfg *config.Config, name, fallback string) string {
 	if cwd, err := os.Getwd(); err == nil {
 		dirs = append(dirs, filepath.Join(cwd, "assets"))
 	}
+	return dirs
+}
+
+func loadText(cfg *config.Config, name, fallback string) string {
 	seen := map[string]bool{}
-	for _, dir := range dirs {
+	for _, dir := range assetDirs(cfg) {
 		if seen[dir] {
 			continue
 		}
@@ -59,6 +66,22 @@ func loadText(cfg *config.Config, name, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// loadAsset reads a shipped binary asset (e.g. the founder avatar PNG) or returns nil when it is
+// not present, so callers can fall back gracefully rather than failing the bootstrap.
+func loadAsset(cfg *config.Config, name string) []byte {
+	seen := map[string]bool{}
+	for _, dir := range assetDirs(cfg) {
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil && len(b) > 0 {
+			return b
+		}
+	}
+	return nil
 }
 
 func assetHash(text string) string {
@@ -188,7 +211,36 @@ func EnsureRoot(ctx context.Context, d db.DB, cfg *config.Config) (string, bool,
 			return token, created, err
 		}
 	}
+	if err := seedRootAvatar(ctx, d, cfg); err != nil {
+		return token, created, err
+	}
 	return token, created, nil
+}
+
+// seedRootAvatar gives the founder its shipped avatar (assets/the_root.png). It runs once — guarded
+// by a meta flag so it also upgrades an install whose TheRoot predates the avatar feature, yet a
+// later deliberate `avatar clear` on TheRoot is respected rather than re-applied on the next boot.
+// It never overwrites an existing custom avatar (ON CONFLICT DO NOTHING), and a missing or invalid
+// asset is not fatal: the deterministic generated default is simply kept.
+func seedRootAvatar(ctx context.Context, d db.DB, cfg *config.Config) error {
+	if _, done := db.GetMeta(ctx, d, "root.avatar.seeded"); done {
+		return nil
+	}
+	data := loadAsset(cfg, "the_root.png")
+	if len(data) == 0 {
+		return nil // asset not shipped here; keep trying on a later boot that has it
+	}
+	mime, err := avatar.Validate(data)
+	if err != nil {
+		return nil // a malformed asset must not break the bootstrap; keep the generated default
+	}
+	if _, err := db.Exec(ctx, d,
+		`INSERT INTO avatars (name, mime, data, updated) VALUES (?,?,?,?)
+		 ON CONFLICT(name) DO NOTHING`,
+		config.RootName, mime, data, db.Now()); err != nil {
+		return err
+	}
+	return db.SetMeta(ctx, d, "root.avatar.seeded", "1")
 }
 
 // EnsureRootOnPool runs EnsureRoot inside its own transaction on the pool.

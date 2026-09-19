@@ -6,12 +6,12 @@ import (
 	"os"
 	"testing"
 
-	"aif/internal/avatar"
-	"aif/internal/config"
-	"aif/internal/core"
-	"aif/internal/db"
-	"aif/internal/harness"
-	"aif/internal/seed"
+	"github.com/dshein-alt/aif/internal/avatar"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/core"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/seed"
 )
 
 func rootRig(t *testing.T) (*harness.Rig, []byte) {

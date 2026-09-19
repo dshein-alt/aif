@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/config"
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 const webPW = "ui-test-web-token"

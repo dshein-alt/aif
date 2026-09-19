@@ -16,7 +16,7 @@ RUN go mod download
 COPY . .
 ARG GIT_SHA=dev
 RUN CGO_ENABLED=0 go build -trimpath \
-      -ldflags "-s -w -X aif/internal/core.BuildID=${GIT_SHA}" \
+      -ldflags "-s -w -X github.com/dshein-alt/aif/internal/core.BuildID=${GIT_SHA}" \
       -o /out/aif ./cmd/aif
 
 # ---- run --------------------------------------------------------------------

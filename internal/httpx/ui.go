@@ -23,11 +23,11 @@ import (
 	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/util"
 
-	"aif/internal/config"
-	"aif/internal/core"
-	"aif/internal/db"
-	"aif/internal/storage"
-	"aif/internal/tokens"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/core"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/storage"
+	"github.com/dshein-alt/aif/internal/tokens"
 )
 
 // The read-only human view (/ui). Plain HTML + inline CSS, no third-party JS; the only script is the

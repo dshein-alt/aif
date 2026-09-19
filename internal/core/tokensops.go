@@ -6,10 +6,10 @@ import (
 	"sort"
 	"strings"
 
-	"aif/internal/config"
-	"aif/internal/db"
-	"aif/internal/sanitize"
-	"aif/internal/tokens"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/sanitize"
+	"github.com/dshein-alt/aif/internal/tokens"
 )
 
 func init() {

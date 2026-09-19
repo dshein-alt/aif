@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 func itoaF(f float64) string { return strconv.FormatInt(int64(f), 10) }

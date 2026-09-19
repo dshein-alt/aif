@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 func rpcResult(t *testing.T, resp *harness.Resp) map[string]any {

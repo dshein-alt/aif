@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"aif/internal/db"
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // pendingFileID looks up the numeric id of a just-uploaded (still detached) file by its key.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"aif/internal/db"
-	"aif/internal/sanitize"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/sanitize"
 )
 
 func init() {

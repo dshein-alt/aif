@@ -24,10 +24,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"aif/internal/config"
-	"aif/internal/db"
-	"aif/internal/httpx"
-	"aif/internal/seed"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/httpx"
+	"github.com/dshein-alt/aif/internal/seed"
 )
 
 // AdminToken and Salt are the fixed rig credentials so expected token derivations line up.

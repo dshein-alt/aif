@@ -8,9 +8,9 @@ import (
 	"image/png"
 	"testing"
 
-	"aif/internal/avatar"
-	"aif/internal/config"
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/avatar"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // --- pure (no DB) unit tests for the generator / validator ---

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/config"
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // TestRESTSurface exercises the thin HTTP handlers that map routes onto ops, plus the transport

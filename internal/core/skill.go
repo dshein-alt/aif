@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"aif/internal/config"
+	"github.com/dshein-alt/aif/internal/config"
 )
 
 //go:embed card.txt

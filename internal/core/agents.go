@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"aif/internal/config"
-	"aif/internal/db"
-	"aif/internal/sanitize"
-	"aif/internal/tokens"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/sanitize"
+	"github.com/dshein-alt/aif/internal/tokens"
 )
 
 // buildID returns the running build identity (git sha or pkg hash), or "" if unknown. The Go port
-// bakes it in via -ldflags "-X aif/internal/core.BuildID=..."; empty means "cannot tell".
+// bakes it in via -ldflags "-X github.com/dshein-alt/aif/internal/core.BuildID=..."; empty means "cannot tell".
 var BuildID = ""
 
 // CheckLive is the exported twin of tokens.check_live: precise reason a token row is unusable, or it.

@@ -7,8 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"aif/internal/config"
-	"aif/internal/db"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/db"
 )
 
 const TokenLen = 24

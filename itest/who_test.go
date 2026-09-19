@@ -3,7 +3,7 @@ package itest
 import (
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // TestWhoAndOnlineCounts guards opWho's online-count query. It once ran without a WHERE clause, so

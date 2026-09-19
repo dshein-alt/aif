@@ -12,12 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"aif/internal/avatar"
-	"aif/internal/config"
-	"aif/internal/core"
-	"aif/internal/db"
-	"aif/internal/sanitize"
-	"aif/internal/tokens"
+	"github.com/dshein-alt/aif/internal/avatar"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/core"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/sanitize"
+	"github.com/dshein-alt/aif/internal/tokens"
 )
 
 const (

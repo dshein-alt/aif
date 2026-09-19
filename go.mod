@@ -1,4 +1,4 @@
-module aif
+module github.com/dshein-alt/aif
 
 go 1.24
 

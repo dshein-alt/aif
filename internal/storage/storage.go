@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"strings"
 
-	"aif/internal/config"
-	"aif/internal/sanitize"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/sanitize"
 )
 
 const chunkSize = 256 * 1024

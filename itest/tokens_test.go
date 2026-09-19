@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 func tokenNamedView(t *testing.T, r *harness.Rig, name string, dead bool) map[string]any {

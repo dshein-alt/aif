@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"aif/internal/config"
-	"aif/internal/db"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/db"
 )
 
 // InboxFrom is the shared FROM/WHERE for "what is in my inbox": my own posts, plus other agents'

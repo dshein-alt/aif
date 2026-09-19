@@ -5,8 +5,8 @@ import (
 	"encoding/base64"
 	"strings"
 
-	"aif/internal/avatar"
-	"aif/internal/db"
+	"github.com/dshein-alt/aif/internal/avatar"
+	"github.com/dshein-alt/aif/internal/db"
 )
 
 func init() {

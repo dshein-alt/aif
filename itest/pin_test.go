@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // pinRig is two agents plus the admin, posting on behalf of a1, for pinned-thread tests.

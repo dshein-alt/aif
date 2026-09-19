@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/config"
+	"github.com/dshein-alt/aif/internal/config"
 )
 
 func testCfg(t *testing.T) *config.Config {

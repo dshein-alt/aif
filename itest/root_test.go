@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"aif/internal/config"
-	"aif/internal/db"
-	"aif/internal/harness"
-	"aif/internal/seed"
-	"aif/internal/tokens"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/seed"
+	"github.com/dshein-alt/aif/internal/tokens"
 )
 
 // TheRoot is the idempotent founder account: a name-reserved agent whose token is derivable from

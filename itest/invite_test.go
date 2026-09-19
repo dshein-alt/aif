@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // mcpErr returns the {err,...} body from an isError MCP result (which carries JSON text, not

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // multipartRaw posts an arbitrary multipart form (value fields and/or files) to a URL as a bearer.

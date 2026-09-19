@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/config"
-	"aif/internal/db"
-	"aif/internal/harness"
-	"aif/internal/seed"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/seed"
 )
 
 // seededRig builds a rig with the seed switch on (as a normal serve would).

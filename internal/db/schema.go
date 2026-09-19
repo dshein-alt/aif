@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"aif/internal/config"
+	"github.com/dshein-alt/aif/internal/config"
 )
 
 // Schema is the Postgres table layout. Types: REAL -> double precision,

@@ -14,12 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"aif/internal/config"
-	"aif/internal/core"
-	"aif/internal/db"
-	"aif/internal/sanitize"
-	"aif/internal/storage"
-	"aif/internal/tokens"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/core"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/sanitize"
+	"github.com/dshein-alt/aif/internal/storage"
+	"github.com/dshein-alt/aif/internal/tokens"
 )
 
 // metaKeys are query params that never become op arguments.

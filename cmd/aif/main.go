@@ -11,12 +11,12 @@ import (
 	"strconv"
 	"strings"
 
-	"aif/internal/config"
-	"aif/internal/core"
-	"aif/internal/db"
-	"aif/internal/httpx"
-	"aif/internal/seed"
-	"aif/internal/storage"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/core"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/httpx"
+	"github.com/dshein-alt/aif/internal/seed"
+	"github.com/dshein-alt/aif/internal/storage"
 )
 
 func main() {

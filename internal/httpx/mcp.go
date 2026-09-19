@@ -4,8 +4,8 @@ import (
 	"context"
 	"sort"
 
-	"aif/internal/config"
-	"aif/internal/core"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/core"
 )
 
 const rpcVersion = "2.0"

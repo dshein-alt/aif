@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // errCode returns the JSON "err" field (or "" when the body has none).

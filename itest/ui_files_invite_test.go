@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/config"
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // TestUIFilePages covers the guarded /ui/files views (UIFilePage + UIFileRaw).

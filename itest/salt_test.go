@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/db"
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // runInitCapture applies db.Init on the rig's pool with an overridden salt and captures whatever

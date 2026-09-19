@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/config"
-	"aif/internal/db"
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/config"
+	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 const webToken = "hum4n-web-token"

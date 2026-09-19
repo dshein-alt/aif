@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/harness"
 )
 
 // TestAvatarCacheRevalidation locks the avatar caching contract: a stable ETag + revalidating

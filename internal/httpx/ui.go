@@ -18,7 +18,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/renderer"
+	"github.com/yuin/goldmark/util"
 
 	"aif/internal/config"
 	"aif/internal/core"
@@ -28,9 +31,11 @@ import (
 )
 
 // The read-only human view (/ui), ported from aif/web.py. Plain HTML + inline CSS, no third-party
-// JS; the only script is the inline in-place reloader. Security model: agent text is markdown
-// rendered server-side with raw HTML escaped (goldmark's default), so a <script> in a message shows
-// as text, never markup. Login is a form -> an HttpOnly cookie holding a derived, HMAC-signed
+// JS; the only script is the inline in-place reloader. Security model (matching the Python baseline's
+// mistune(escape=True)): agent text is markdown rendered server-side with any raw HTML ESCAPED to
+// visible text, so a <script> in a message shows as &lt;script&gt;, never markup. Goldmark's stock
+// behaviour is to drop raw HTML as a comment placeholder, so a custom node renderer restores the
+// escape-to-text parity. Login is a form -> an HttpOnly cookie holding a derived, HMAC-signed
 // UI-only session; the credential itself is never stored or put in a link.
 //
 // Two additions over the Python baseline: the relay marker (messages.via) is shown as a "via NAME"
@@ -45,7 +50,29 @@ const (
 	lockPrefix     = "\U0001f512 " // 🔒 a locked thread
 )
 
-var uiMarkdown = goldmark.New(goldmark.WithExtensions(extension.Table))
+// escapeRawHTML renders raw inline HTML by escaping it to visible text, mirroring mistune's
+// escape=True. Goldmark's default renderer emits "<!-- raw HTML omitted -->" for raw HTML (unsafe
+// off); we want the Python baseline's behaviour of showing it literally as text. Registered at a
+// priority below the built-in html renderer (1000) so it wins for the RawHTML node kind.
+type escapeRawHTML struct{}
+
+func (escapeRawHTML) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+	reg.Register(ast.KindRawHTML, func(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			raw := node.(*ast.RawHTML)
+			for i := 0; i < raw.Segments.Len(); i++ {
+				seg := raw.Segments.At(i)
+				_, _ = w.WriteString(html.EscapeString(string(seg.Value(source))))
+			}
+		}
+		return ast.WalkSkipChildren, nil
+	})
+}
+
+var uiMarkdown = goldmark.New(
+	goldmark.WithExtensions(extension.Table),
+	goldmark.WithRendererOptions(renderer.WithNodeRenderers(util.Prioritized(escapeRawHTML{}, 100))),
+)
 
 var (
 	tagSplit   = regexp.MustCompile(`(<[^>]+>)`)
@@ -168,8 +195,10 @@ func toF(v any) float64 {
 	return 0
 }
 
-// bodyHTML renders a message body: markdown (raw HTML escaped) then @mention highlighting applied
-// only outside code spans and tags.
+// bodyHTML renders a message body: markdown (with raw HTML escaped to text by uiMarkdown), code
+// spans passed through verbatim, and @mention highlighting applied only to text outside tags and
+// code. Go's regexp.Split cannot reproduce the port's re.split-with-capture (it drops both the
+// capture groups and, for a plain pattern, the matched text), so both splits are scanned manually.
 func bodyHTML(text string) string {
 	if text == "" {
 		return ""
@@ -178,20 +207,26 @@ func bodyHTML(text string) string {
 	_ = uiMarkdown.Convert([]byte(text), &buf)
 	rendered := buf.String()
 	var out strings.Builder
-	for _, segment := range codeSplit.Split(rendered, -1) {
-		if strings.HasPrefix(segment, "<code") {
-			out.WriteString(segment)
-			continue
-		}
-		parts := tagSplit.Split(segment, -1)
-		for i, part := range parts {
-			if i%2 == 0 {
-				out.Write(mentionRE.ReplaceAll([]byte(part), mentionRep))
-			} else {
-				out.WriteString(part)
-			}
-		}
+	pos := 0
+	for _, m := range codeSplit.FindAllStringIndex(rendered, -1) {
+		out.WriteString(mentionOutsideTags(rendered[pos:m[0]]))
+		out.WriteString(rendered[m[0]:m[1]]) // code span verbatim: never decorate a sample's @name
+		pos = m[1]
 	}
+	out.WriteString(mentionOutsideTags(rendered[pos:]))
+	return out.String()
+}
+
+// mentionOutsideTags wraps @mentions in a text run but leaves tags and their attribute values alone.
+func mentionOutsideTags(segment string) string {
+	var out strings.Builder
+	last := 0
+	for _, m := range tagSplit.FindAllStringIndex(segment, -1) {
+		out.Write(mentionRE.ReplaceAll([]byte(segment[last:m[0]]), mentionRep))
+		out.WriteString(segment[m[0]:m[1]]) // tag verbatim
+		last = m[1]
+	}
+	out.Write(mentionRE.ReplaceAll([]byte(segment[last:]), mentionRep))
 	return out.String()
 }
 

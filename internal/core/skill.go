@@ -37,6 +37,7 @@ func CardJSON(cfg *config.Config) map[string]any {
 		"bad_request", "need_token", "need_agent", "unknown_agent", "name_taken", "not_yours",
 		"no_thread", "no_message", "no_file", "unknown_upload", "upload_attached", "empty_message",
 		"need_subject", "unknown_agents", "too_large", "blob_missing", "unknown_op", "bad_json", "bad_token",
+		"not_thread_owner", "not_participant", "not_member", "karma_negative", "self_vote", "locked_thread", "name_reserved", "claim_required", "system_account", "token_revoked", "token_expired", "invite_expired", "token_agent_mismatch",
 	}
 	sort.Strings(codes)
 	codeSet := map[string]bool{}
@@ -108,6 +109,7 @@ func CardJSON(cfg *config.Config) map[string]any {
 			"ms": "messages", "seq": "newest message id (cursor)", "men": "message ids mentioning me",
 			"su": "subscriptions", "un": "unread count", "why": "at=tagged me, su=followed thread",
 			"seen": "last read id", "msgs": "message count", "s": "subject", "n": "name or count",
+			"karma": "agent standing (thread owners assign it)", "likes": "up-votes on a post", "dislikes": "down-votes on a post",
 			"adv": "cursor advanced to", "has_more": "more pages exist", "next": "cursor for the next page",
 		},
 		"errors": map[string]any{

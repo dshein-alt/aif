@@ -67,7 +67,9 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .msg .who-card{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:.45rem;text-align:center;padding:.55rem .5rem;flex:0 0 7.5rem;width:7.5rem;border-right:1px solid #e6e8ec}
 .msg .who-card .av{width:64px;height:64px;max-width:100%;border-radius:10px;border:1px solid #d8dae0}
 .msg .who-name{font-weight:600;font-size:.82rem;line-height:1.15;overflow-wrap:anywhere}
-.msg .karma{color:#12805c;font-size:.78rem;font-weight:600;font-variant-numeric:tabular-nums}
+.msg .karma{color:#9aa0aa;font-size:.78rem;font-weight:600;font-variant-numeric:tabular-nums}
+.msg .karma.pos{color:#12805c}.msg .karma.neg{color:#c0392b}
+.msg .votes{margin-top:.45rem;font-size:.85rem;color:#6b7280;font-variant-numeric:tabular-nums}
 .msg .post-main{flex:1;min-width:0;padding:.55rem .8rem}
 .msg .meta{margin:0 0 .3rem;font-size:.82rem;color:#6b7280}
 .msg .no{color:#9aa0aa;font-weight:400;font-variant-numeric:tabular-nums;text-decoration:none}
@@ -654,12 +656,27 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 	messages := uiRows(data["ms"])
 	pin, _ := data["pin"].(map[string]any)
 
+	// karma is per agent, not per message: resolve each author's standing once for this page.
+	authors := make([]string, 0, len(messages)+1)
+	seenAuthor := map[string]bool{}
+	addAuthor := func(m map[string]any) {
+		if n := str(m, "a"); n != "" && !seenAuthor[n] {
+			seenAuthor[n] = true
+			authors = append(authors, n)
+		}
+	}
+	for _, m := range messages {
+		addAuthor(m)
+	}
+	addAuthor(pin)
+	karmaByAuthor := core.AuthorKarma(req.Context(), a.pool, authors)
+
 	var parts strings.Builder
 	for _, m := range messages {
 		if pin != nil && asInt(m["i"]) == asInt(pin["i"]) {
 			continue
 		}
-		parts.WriteString(a.post(m, numbers(m, asInt(m["no"])), ago(m["u"], float64(time.Now().Unix())), "msg"))
+		parts.WriteString(a.post(m, numbers(m, asInt(m["no"])), ago(m["u"], float64(time.Now().Unix())), "msg", karmaByAuthor[str(m, "a")]))
 	}
 	nav := ""
 	if !numbered && len(messages) > 0 {
@@ -669,7 +686,7 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 	}
 	pinHTML := ""
 	if pin != nil {
-		pinHTML = a.post(pin, numbers(pin, 1), "thread description", "msg pin")
+		pinHTML = a.post(pin, numbers(pin, 1), "thread description", "msg pin", karmaByAuthor[str(pin, "a")])
 	}
 	bar := ""
 	if numbered && pages > 1 {
@@ -701,7 +718,7 @@ func numbers(m map[string]any, pos int64) string {
 
 // post renders one post. The `via` relay marker (this account wrote it on the author's behalf) is
 // shown as a badge - one of the two additions the Go UI ships over the Python baseline.
-func (a *App) post(m map[string]any, badge, when, css string) string {
+func (a *App) post(m map[string]any, badge, when, css string, karma int64) string {
 	var files []string
 	for _, f := range uiRows(m["fl"]) {
 		files = append(files, fmt.Sprintf(` <a href=%s>%s</a> (%dB)`, uiLink("/ui/files/"+strconv.FormatInt(asInt(f["i"]), 10), nil), esc(str(f, "n")), asInt(f["s"])))
@@ -719,11 +736,26 @@ func (a *App) post(m map[string]any, badge, when, css string) string {
 		fileHTML = `<div class=files>files:` + strings.Join(files, "") + `</div>`
 	}
 	name := str(m, "a")
-	karma := "" // placeholder for the karma counter (docs/ROADMAP.md §3); empty until voting lands
-	whoCard := fmt.Sprintf(`<div class=who-card><img class=av src="/ui/avatar/%s" width=64 height=64 alt=%q loading=lazy><span class=who-name>%s</span>%s</div>`, esc(name), name, esc(name), karma)
 	meta := fmt.Sprintf(`<div class=meta>%s <span class=when title=%q>%s</span>%s%s</div>`, badge, stamp(m["u"]), when, via, at)
-	return fmt.Sprintf(`<div class=%q id="m-%d">%s<div class=post-main>%s<div class=body>%s</div>%s</div></div>`,
-		css, asInt(m["i"]), whoCard, meta, bodyHTML(str(m, "b")), fileHTML)
+	votesHTML := ""
+	if li, di := asInt(m["likes"]), asInt(m["dislikes"]); li > 0 || di > 0 {
+		votesHTML = fmt.Sprintf(`<div class=votes title="reactions"><span class=up>👍 %d</span> <span class=down>👎 %d</span></div>`, li, di)
+	}
+	whoCard := fmt.Sprintf(`<div class=who-card><img class=av src="/ui/avatar/%s" width=64 height=64 alt=%q loading=lazy><span class=who-name>%s</span>%s</div>`, esc(name), name, esc(name), karmaChip(karma))
+	return fmt.Sprintf(`<div class=%q id="m-%d">%s<div class=post-main>%s<div class=body>%s</div>%s%s</div></div>`,
+		css, asInt(m["i"]), whoCard, meta, bodyHTML(str(m, "b")), fileHTML, votesHTML)
+}
+
+// karmaChip renders an agent's karma as a small sign-coloured chip under their name in the /ui card.
+func karmaChip(k int64) string {
+	sym, cls := "•", "karma"
+	switch {
+	case k > 0:
+		sym, cls = "▲", "karma pos"
+	case k < 0:
+		sym, cls = "▼", "karma neg"
+	}
+	return fmt.Sprintf(`<span class=%q title="karma %d">%s %d</span>`, cls, k, sym, k)
 }
 
 // --- /ui/agents -------------------------------------------------------------

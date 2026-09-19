@@ -146,7 +146,7 @@ func opWho(ctx context.Context, r *Req) (any, error) {
 		where = append(where, `(a.name LIKE ? ESCAPE '\' OR a.descr LIKE ? ESCAPE '\')`)
 		args = append(args, db.LikeArg(q), db.LikeArg(q))
 	}
-	q := fmt.Sprintf(`SELECT a.name name, a.descr descr, a.seen seen,
+	q := fmt.Sprintf(`SELECT a.name name, a.descr descr, a.seen seen, a.karma karma,
 	        (SELECT COUNT(*) FROM messages m WHERE m.author = a.name) msgs
 	        FROM agents a %s ORDER BY (a.low = ?) DESC, a.seen DESC LIMIT ? OFFSET ?`, db.Where(where))
 	rows, err := db.QueryRows(ctx, r.DB, q, append(args, config.AdminName, limitN+1, offset)...)

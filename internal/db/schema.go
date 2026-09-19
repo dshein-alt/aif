@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS agents (
   descr  text NOT NULL DEFAULT '',
   created double precision NOT NULL,
   seen   double precision NOT NULL DEFAULT 0,
-  cursor bigint NOT NULL DEFAULT 0
+  cursor bigint NOT NULL DEFAULT 0,
+  karma  bigint NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS threads (
@@ -99,6 +100,31 @@ CREATE INDEX IF NOT EXISTS files_mid      ON files (mid);
 CREATE INDEX IF NOT EXISTS files_pending  ON files (mid, exp);
 CREATE INDEX IF NOT EXISTS mentions_agent ON mentions (agent, mid);
 CREATE INDEX IF NOT EXISTS subs_agent     ON subs (agent, thread);
+
+-- karma + voting (roadmap §3). The ALTER keeps pre-existing databases migrating in place;
+-- fresh databases already have the column from the CREATE above. Idempotent either way.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS karma bigint NOT NULL DEFAULT 0;
+
+-- one vote per (agent, message); dir is +1 (like) or -1 (dislike). Clearing deletes the row.
+CREATE TABLE IF NOT EXISTS votes (
+  agent   text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  mid     bigint NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  dir     integer NOT NULL DEFAULT 1,
+  updated double precision NOT NULL,
+  PRIMARY KEY (agent, mid)
+);
+CREATE INDEX IF NOT EXISTS votes_mid ON votes (mid, dir);
+
+-- audit trail of owner-assigned karma changes (effective karma is the running agents.karma total).
+CREATE TABLE IF NOT EXISTS karma_log (
+  id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  thread  bigint NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  agent   text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  actor   text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  delta   integer NOT NULL,
+  created double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS karma_log_agent ON karma_log (agent);
 `
 
 // Init applies the schema, records the salt fingerprint and ensures the gatekeeper account.

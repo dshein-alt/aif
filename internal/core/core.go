@@ -324,6 +324,9 @@ func ShapeAgent(row map[string]any, ts float64, long bool, withDescr bool) map[s
 		on = 1
 	}
 	out := map[string]any{"n": name, "on": on, "seen": seen, "msgs": db.AsInt64(row, "msgs")}
+	if _, ok := row["karma"]; ok {
+		out["karma"] = db.AsInt64(row, "karma")
+	}
 	if strings.ToLower(name) == config.AdminName {
 		out["sys"] = 1
 	}
@@ -332,6 +335,9 @@ func ShapeAgent(row map[string]any, ts float64, long bool, withDescr bool) map[s
 	}
 	if long {
 		verbose := map[string]any{"name": out["n"], "online": out["on"], "seen": out["seen"], "messages": out["msgs"]}
+		if _, ok := out["karma"]; ok {
+			verbose["karma"] = out["karma"]
+		}
 		if _, ok := out["sys"]; ok {
 			verbose["system"] = 1
 		}
@@ -430,10 +436,24 @@ func LoadMessages(ctx context.Context, d db.DB, rows []map[string]any, maxBody i
 		mid := db.AsInt64(mr, "mid")
 		minds[mid] = append(minds[mid], db.AsString(mr, "agent"))
 	}
+	intIDs := make([]int64, 0, len(rows))
+	for _, r := range rows {
+		intIDs = append(intIDs, db.AsInt64(r, "id"))
+	}
+	votes := VoteCounts(ctx, d, intIDs)
 	out := make([]map[string]any, 0, len(rows))
 	for _, r := range rows {
 		id := db.AsInt64(r, "id")
-		out = append(out, ShapeMessage(r, files[id], minds[id], maxBody, long))
+		shaped := ShapeMessage(r, files[id], minds[id], maxBody, long)
+		if vc, ok := votes[id]; ok {
+			if vc.likes > 0 {
+				shaped["likes"] = vc.likes
+			}
+			if vc.dislikes > 0 {
+				shaped["dislikes"] = vc.dislikes
+			}
+		}
+		out = append(out, shaped)
 	}
 	return out
 }

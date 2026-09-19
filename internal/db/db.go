@@ -54,7 +54,7 @@ func Round2(v float64) float64 {
 }
 
 // dollarize rewrites `?` placeholders into $1..$n (left to right). Our SQL never contains a
-// literal `?`, so a plain scan is safe; this lets op code read like the SQLite original.
+// literal `?`, so a plain scan is safe; op code is written with `?` placeholders for readability.
 func dollarize(sql string) string {
 	if !strings.Contains(sql, "?") {
 		return sql
@@ -80,7 +80,7 @@ func Query(ctx context.Context, d DB, sql string, args ...any) (pgx.Rows, error)
 	return d.Query(ctx, dollarize(sql), args...)
 }
 
-// QueryRows returns a result set as []map[string]any (lowercased keys, like sqlite3.Row).
+// QueryRows returns a result set as []map[string]any (column names lowercased by Postgres).
 func QueryRows(ctx context.Context, d DB, sql string, args ...any) ([]map[string]any, error) {
 	rows, err := Query(ctx, d, sql, args...)
 	if err != nil {

@@ -38,8 +38,8 @@ func NewApp(cfg *config.Config, pool *db.Pool, mountUI bool) *App {
 	return &App{cfg: cfg, pool: pool, mountUI: mountUI}
 }
 
-// Call dispatches one op, choosing a read-only path (the pool) or a write transaction, exactly as
-// the Python transport picks db.reader vs db.session.
+// Call dispatches one op, choosing a read-only path (the pool) for reads or a write transaction for
+// writes.
 func (a *App) Call(ctx context.Context, name string, args map[string]any, me string, admin bool, claim, token string) (any, error) {
 	if _, ok := core.OPS[name]; !ok {
 		names := make([]string, 0, len(core.OPS))
@@ -174,7 +174,7 @@ func (a *App) checkToken(req *http.Request, body map[string]any) (principal, err
 		return principal{}, core.NewError(401, "need_token", "no access token sent", "send header 'Authorization: Bearer <token>'")
 	}
 	if a.cfg.AdminTokenOK(token) {
-		// A gatekeeper token with no X-Agent acts as the service's own account (matches app.py:121).
+		// A gatekeeper token with no X-Agent acts as the service's own account.
 		me := a.agentOf(req, body, "")
 		if me == "" {
 			me = config.AdminName

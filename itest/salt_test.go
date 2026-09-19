@@ -28,9 +28,9 @@ func runInitCapture(t *testing.T, r *harness.Rig, salt string) string {
 	return buf.String()
 }
 
-// TestSaltChangeIsWarnedOnlyWhenTokensExist mirrors the Python startup guard: a fingerprint is
-// recorded quietly on first start, and a later salt change is only alarming once there are agent
-// tokens that the change would silently invalidate.
+// TestSaltChangeIsWarnedOnlyWhenTokensExist covers the startup guard: a fingerprint is recorded
+// quietly on first start, and a later salt change is only alarming once there are agent tokens that
+// the change would silently invalidate.
 func TestSaltChangeIsWarnedOnlyWhenTokensExist(t *testing.T) {
 	r := harness.New(t, false)
 

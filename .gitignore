@@ -1,21 +1,11 @@
-# virtualenv / build artefacts
-.venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
+# build artefacts
+/dist/
+/build/
+/aif
 
-# tooling caches
-.pytest_cache/
-.ruff_cache/
-
-# local state (DB + blobs)
+# local state (attachment blobs; the database itself lives in Postgres)
 var/
 data/
-*.db
-*.db-wal
-*.db-shm
 .aif-*.json
 
 # secrets

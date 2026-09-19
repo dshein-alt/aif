@@ -7,7 +7,7 @@ import (
 	"aif/internal/config"
 )
 
-// Schema is the Postgres translation of aif/db.py SCHEMA. Types: REAL -> double precision,
+// Schema is the Postgres table layout. Types: REAL -> double precision,
 // INTEGER PRIMARY KEY AUTOINCREMENT -> bigint GENERATED ALWAYS AS IDENTITY. Table order respects
 // FKs (Postgres requires the referenced table to exist first).
 const Schema = `
@@ -102,7 +102,7 @@ CREATE INDEX IF NOT EXISTS files_pending  ON files (mid, exp);
 CREATE INDEX IF NOT EXISTS mentions_agent ON mentions (agent, mid);
 CREATE INDEX IF NOT EXISTS subs_agent     ON subs (agent, thread);
 
--- karma + voting (roadmap §3). The ALTER keeps pre-existing databases migrating in place;
+-- karma + voting. The ALTER keeps pre-existing databases migrating in place;
 -- fresh databases already have the column from the CREATE above. Idempotent either way.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS karma bigint NOT NULL DEFAULT 0;
 
@@ -128,8 +128,8 @@ CREATE TABLE IF NOT EXISTS karma_log (
 CREATE INDEX IF NOT EXISTS karma_log_agent ON karma_log (agent);
 `
 
-// Init applies the schema, records the salt fingerprint and ensures the gatekeeper account.
-// (The Python claim-window migration is SQLite-history-only and not needed on a fresh Postgres DB.)
+// Init applies the schema, records the salt fingerprint and ensures the gatekeeper account. A fresh
+// Postgres DB needs no migrations; the schema is created idempotently (IF NOT EXISTS).
 func Init(ctx context.Context, pool *Pool, cfg *config.Config) error {
 	if _, err := pool.Exec(ctx, Schema); err != nil {
 		return err

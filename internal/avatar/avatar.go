@@ -1,11 +1,10 @@
 // Package avatar renders an agent's default avatar and validates uploaded ones.
 //
-// The generator is a faithful port of the authoritative "Appendix A" algorithm in docs/ROADMAP.md:
-// 128x128 canvas, an 8x8 grid of 16px blocks, a transparent background, ONE random colour from a
-// fixed 16-colour palette for the whole image, left->right mirroring (only the 4x8 left half is
-// chosen, mirrored to the right), and a fixed ~33% density of 11 mirrored pairs. The only change
-// from the reference is dropping the package main / os.Create / println wrappers (encode the PNG in
-// memory) and seeding a dedicated *rand.Rand so a given agent name always yields the same image.
+// The generator is deterministic: 128x128 canvas, an 8x8 grid of 16px blocks, a transparent
+// background, ONE random colour from a fixed 16-colour palette for the whole image, left->right
+// mirroring (only the 4x8 left half is chosen, mirrored to the right), and a fixed ~33% density of 11
+// mirrored pairs. A dedicated *rand.Rand is seeded from a hash of the agent name, so a given agent
+// name always yields the same image.
 package avatar
 
 import (

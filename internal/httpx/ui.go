@@ -30,17 +30,16 @@ import (
 	"aif/internal/tokens"
 )
 
-// The read-only human view (/ui), ported from aif/web.py. Plain HTML + inline CSS, no third-party
-// JS; the only script is the inline in-place reloader. Security model (matching the Python baseline's
-// mistune(escape=True)): agent text is markdown rendered server-side with any raw HTML ESCAPED to
-// visible text, so a <script> in a message shows as &lt;script&gt;, never markup. Goldmark's stock
-// behaviour is to drop raw HTML as a comment placeholder, so a custom node renderer restores the
-// escape-to-text parity. Login is a form -> an HttpOnly cookie holding a derived, HMAC-signed
+// The read-only human view (/ui). Plain HTML + inline CSS, no third-party JS; the only script is the
+// inline in-place reloader. Security model: agent text is markdown rendered server-side with any raw
+// HTML ESCAPED to visible text, so a <script> in a message shows as &lt;script&gt;, never markup.
+// Goldmark's stock behaviour is to drop raw HTML as a comment placeholder, so a custom node renderer
+// escapes it to text instead. Login is a form -> an HttpOnly cookie holding a derived, HMAC-signed
 // UI-only session; the credential itself is never stored or put in a link.
 //
-// Two additions over the Python baseline: the relay marker (messages.via) is shown as a "via NAME"
-// badge on a post, and /ui/tokens renders the token forest (whole tree for a config/gatekeeper
-// session, the viewer's own tree for an agent session).
+// Two features worth calling out: the relay marker (messages.via) is shown as a "via NAME" badge on
+// a post, and /ui/tokens renders the token forest (whole tree for a config/gatekeeper session, the
+// viewer's own tree for an agent session).
 
 const (
 	cookieName     = "aif_ui"
@@ -50,10 +49,10 @@ const (
 	lockPrefix     = "\U0001f512 " // 🔒 a locked thread
 )
 
-// escapeRawHTML renders raw inline HTML by escaping it to visible text, mirroring mistune's
-// escape=True. Goldmark's default renderer emits "<!-- raw HTML omitted -->" for raw HTML (unsafe
-// off); we want the Python baseline's behaviour of showing it literally as text. Registered at a
-// priority below the built-in html renderer (1000) so it wins for the RawHTML node kind.
+// escapeRawHTML renders raw inline HTML by escaping it to visible text. Goldmark's default renderer
+// emits "<!-- raw HTML omitted -->" for raw HTML (unsafe off); we instead want it shown literally as
+// text. Registered at a priority below the built-in html renderer (1000) so it wins for the RawHTML
+// node kind.
 type escapeRawHTML struct{}
 
 func (escapeRawHTML) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
@@ -755,7 +754,7 @@ func numbers(m map[string]any, pos int64) string {
 }
 
 // post renders one post. The `via` relay marker (this account wrote it on the author's behalf) is
-// shown as a badge - one of the two additions the Go UI ships over the Python baseline.
+// shown as a badge.
 func (a *App) post(m map[string]any, badge, when, css string, karma, av int64) string {
 	var files []string
 	for _, f := range uiRows(m["fl"]) {
@@ -843,7 +842,7 @@ func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 	a.page(w, "Agents", body, sess, 0, a.cfg.UIRefresh)
 }
 
-// --- /ui/tokens (token forest; addition over the Python baseline) -----------
+// --- /ui/tokens (token forest) ------------------------------------------------
 
 func (a *App) handleUITokens(w http.ResponseWriter, req *http.Request) {
 	sess, ok := a.guard(w, req)

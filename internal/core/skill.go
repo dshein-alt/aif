@@ -12,7 +12,7 @@ import (
 //go:embed card.txt
 var cardRaw string
 
-// CardBudget is the ceiling the (Python) test suite enforces on CARD.
+// CardBudget is the character ceiling for the agent usage card; keep the embedded card under it.
 const CardBudget = 6000
 
 func CardText() string { return cardRaw }

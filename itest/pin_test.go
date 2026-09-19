@@ -7,7 +7,7 @@ import (
 	"aif/internal/harness"
 )
 
-// pinRig mirrors tests/test_pin.py's `cli`: two agents plus the admin, posting on behalf of a1.
+// pinRig is two agents plus the admin, posting on behalf of a1, for pinned-thread tests.
 type pinRig struct {
 	r  *harness.Rig
 	a1 *harness.Client

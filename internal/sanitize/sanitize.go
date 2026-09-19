@@ -5,7 +5,7 @@ import (
 	"unicode"
 )
 
-// Port of aif/sanitize.py: fold invisible/control chars, cap lengths. SQL safety lives entirely
+// Ingest-time content filter: fold invisible/control chars, cap lengths. SQL safety lives entirely
 // in bound parameters (never here); this is the *content* filter only. All funcs are idempotent.
 
 func keep(ch rune) bool { return ch == '\n' || ch == '\t' || ch == ' ' }
@@ -95,7 +95,7 @@ func Oneline(v any, limit int) string {
 	return Cap(strings.Join(strings.Fields(Fold(v)), " "), limit)
 }
 
-// Cap truncates to limit *runes* (Python's [:n] is by code point).
+// Cap truncates to limit *runes* (by code point, not byte).
 func Cap(s string, limit int) string {
 	if limit <= 0 || utf8Len(s) <= limit {
 		return s

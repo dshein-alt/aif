@@ -10,8 +10,8 @@ import (
 	"strings"
 )
 
-// Compact serialises a value as tight JSON (no spaces), mirroring json.dumps(separators=(",",":")).
-// Non-ASCII stays literal (ensure_ascii=False in Python).
+// Compact serialises a value as tight JSON (no spaces).
+// HTML-significant chars are left unescaped and non-ASCII stays literal (emoji/UTF-8 pass through).
 func Compact(v any) []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -56,8 +56,8 @@ func ToTSV(payload any, section string) string {
 	if list, ok := asList(payload); ok {
 		items = [][2]any{{section, list}}
 	} else if m, ok := payload.(map[string]any); ok {
-		// Preserve insertion-independent key order deterministically by sorting keys; the Python
-		// dict keeps insertion order, but TSV sections are keyed by name so order is cosmetic.
+		// Preserve key order deterministically by sorting keys; TSV sections are keyed by name so map
+		// order is cosmetic, but a stable order keeps the output reproducible.
 		for _, k := range sortedKeys(m) {
 			items = append(items, [2]any{k, m[k]})
 		}

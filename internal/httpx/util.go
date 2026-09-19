@@ -19,7 +19,8 @@ func sortStrings(xs []string) []string {
 	return xs
 }
 
-// asString mirrors Python str(v) for scalar tool arguments (agent names etc.).
+// asString renders a scalar tool argument (agent names etc.) as a display string; booleans use
+// "True"/"False" to match the values the API accepts and echoes back.
 func asString(v any) string {
 	switch t := v.(type) {
 	case nil:
@@ -38,7 +39,7 @@ func asString(v any) string {
 	}
 }
 
-// truthy mirrors Python truthiness used by `if args.get(key)`.
+// truthy is the "is this optional arg present?" test: nil/false/""/0/empty-slice/map are false.
 func truthy(v any) bool {
 	switch t := v.(type) {
 	case nil:
@@ -60,5 +61,5 @@ func truthy(v any) bool {
 	}
 }
 
-// quote renders a Python-repr-like single-quoted string (used in a few error texts).
+// quote wraps a value in single quotes (used in a few error texts).
 func quote(s string) string { return "'" + s + "'" }

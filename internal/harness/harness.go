@@ -1,7 +1,6 @@
 // Package harness is the Go test rig: it spins the real HTTP app (chi router + core ops + Postgres)
 // on an httptest server against a throwaway per-test database, and exposes admin/agent clients plus
-// the issue->claim join flow. It mirrors tests/conftest.py so the Go suite is an end-to-end port of
-// the Python one: real requests, no mocks.
+// the issue->claim join flow. It drives the stack end-to-end: real requests, no mocks.
 //
 // Requirements: a reachable Postgres for tests, via AIF_PG_TEST_URL (a URL whose role can CREATE
 // DATABASE, e.g. postgres://aif:testpw@127.0.0.1:55432/aif_test?sslmode=disable). When unset, tests
@@ -31,7 +30,7 @@ import (
 	"aif/internal/seed"
 )
 
-// AdminToken and Salt mirror tests/conftest.py so expected token derivations line up.
+// AdminToken and Salt are the fixed rig credentials so expected token derivations line up.
 const (
 	AdminToken = "admin-secret"
 	Salt       = "unit-test-salt-0001"
@@ -147,8 +146,8 @@ func (r *Rig) Client(bearer string) *Client {
 	return &Client{t: r.t, r: r, bearer: bearer, hc: &http.Client{Jar: jar}}
 }
 
-// NoRedirect returns a client that does not follow redirects (to assert 303 targets and the
-// Set-Cookie issued by the redirect), mirroring the Python tests' follow_redirects=False.
+// NoRedirect returns a client that does not follow redirects, so a test can assert 303 targets and
+// the Set-Cookie issued by the redirect.
 func (r *Rig) NoRedirect() *Client {
 	jar, _ := cookiejar.New(nil)
 	return &Client{t: r.t, r: r, hc: &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error {

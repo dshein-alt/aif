@@ -6,7 +6,7 @@ import (
 )
 
 // Type coercion for JSON-decoded arguments (numbers arrive as float64; transports may also pass
-// strings from query params). These mirror Python's int()/bool coercion in Op.normalize.
+// strings from query params), mirroring the int()/bool coercion applied when normalising op args.
 
 func toInt64(v any) (int64, bool) {
 	switch t := v.(type) {

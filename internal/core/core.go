@@ -224,7 +224,7 @@ func Run(ctx context.Context, d db.DB, cfg *config.Config, name string, args map
 	}
 	args = copyMap(args)
 	verbose := args["long"]
-	delete(args, "long") // transport flag, not an op param (matches Python's args.pop("long"))
+	delete(args, "long") // transport flag, not an op param
 	delete(args, "admin")
 	delete(args, "claim")
 	delete(args, "token")

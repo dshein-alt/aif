@@ -13,7 +13,7 @@ import (
 
 const webToken = "hum4n-web-token"
 
-// webRig mirrors tests/test_ui_login.py: a UI-mounted app whose web token is `webToken`.
+// webRig is a UI-mounted app whose web token is `webToken`.
 func webRig(t *testing.T) *harness.Rig {
 	return harness.NewWith(t, true, func(c *config.Config) { c.WebToken = webToken })
 }

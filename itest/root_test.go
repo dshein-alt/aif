@@ -12,7 +12,7 @@ import (
 )
 
 // TheRoot is the idempotent founder account: a name-reserved agent whose token is derivable from
-// the server salt, so `aif root` can re-reveal it. See docs/ROADMAP.md §1.
+// the server salt, so `aif root` can re-reveal it deterministically without a DB lookup.
 func TestEnsureRootIsIdempotentAndTokenIsDerivable(t *testing.T) {
 	r := harness.New(t, false)
 	want := tokens.DeriveToken(r.Cfg.TokenSalt, config.RootName, config.RootNonce)

@@ -15,8 +15,8 @@ import (
 
 // --- pure (no DB) unit tests for the generator / validator ---
 
-// TestAvatarPNGIsDeterministicValidAndSymmetric checks the generator contract from docs/ROADMAP.md
-// Appendix A without a database: same name => identical bytes, the output is a real 128x128 PNG,
+// TestAvatarPNGIsDeterministicValidAndSymmetric checks the generator contract without a database:
+// same name => identical bytes, the output is a real 128x128 PNG,
 // and the image is mirrored left<->right about its vertical centre.
 func TestAvatarPNGIsDeterministicValidAndSymmetric(t *testing.T) {
 	a := avatar.PNG("scout")

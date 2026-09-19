@@ -56,20 +56,29 @@ type Config struct {
 var suffixes = map[string]int64{"": 1, "B": 1, "KB": 1024, "K": 1024, "MB": 1024 * 1024, "M": 1024 * 1024, "GB": 1024 * 1024 * 1024, "G": 1024 * 1024 * 1024}
 
 func ParseSize(value string) (int64, error) {
-	value = strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(value), " ", ""))
-	for i := len(value); i > 0; i-- {
-		suffix := value[i:]
-		numStr := value[:i]
-		if mult, ok := suffixes[suffix]; ok {
-			var num float64
-			_, err := fmt.Sscanf(numStr, "%f", &num)
-			if err != nil {
-				return 0, fmt.Errorf("invalid size: %q", value)
-			}
-			return int64(num * float64(mult)), nil
-		}
+	v := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(value), " ", ""))
+	if v == "" {
+		return 0, fmt.Errorf("invalid size: %q", value)
 	}
-	return 0, fmt.Errorf("invalid size: %q", value)
+	// Split the numeric prefix from an alphabetic unit suffix. (A scanf("%f") would leniently parse
+	// the leading digits of "512KB" and ignore "KB", silently returning 512 — so we slice by hand.)
+	i := 0
+	for i < len(v) && (v[i] == '.' || v[i] == '+' || v[i] == '-' || (v[i] >= '0' && v[i] <= '9')) {
+		i++
+	}
+	numStr, unit := v[:i], v[i:]
+	if numStr == "" {
+		return 0, fmt.Errorf("invalid size: %q", value)
+	}
+	mult, ok := suffixes[unit]
+	if !ok {
+		return 0, fmt.Errorf("invalid size: %q", value)
+	}
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size: %q", value)
+	}
+	return int64(num * float64(mult)), nil
 }
 
 func envStr(key, def string) string {

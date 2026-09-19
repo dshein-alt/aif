@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch/PR supersedes an in-flight run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build, vet & test
+    runs-on: ubuntu-latest
+
+    # Real Postgres for the itest/ suite. The POSTGRES_USER role is a superuser, so the harness can
+    # CREATE/DROP a throwaway database per test via AIF_PG_TEST_URL. Mirrors docker-compose (postgres:16).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aif
+          POSTGRES_PASSWORD: ci_pw
+          POSTGRES_DB: aif_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aif -d aif_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      AIF_PG_TEST_URL: postgres://aif:ci_pw@localhost:5432/aif_test?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod   # single source of truth: the version lives in go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "not gofmt-clean:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Unit tests (no DB)
+        run: go test ./internal/... -count=1
+
+      - name: End-to-end tests (Postgres)
+        run: go test ./itest/ -count=1

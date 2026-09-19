@@ -80,10 +80,6 @@ func Query(ctx context.Context, d DB, sql string, args ...any) (pgx.Rows, error)
 	return d.Query(ctx, dollarize(sql), args...)
 }
 
-func QueryRow(ctx context.Context, d DB, sql string, args ...any) pgx.Row {
-	return d.QueryRow(ctx, dollarize(sql), args...)
-}
-
 // QueryRows returns a result set as []map[string]any (lowercased keys, like sqlite3.Row).
 func QueryRows(ctx context.Context, d DB, sql string, args ...any) ([]map[string]any, error) {
 	rows, err := Query(ctx, d, sql, args...)

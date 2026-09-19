@@ -196,7 +196,6 @@ type Req struct {
 	Long  bool
 }
 
-func (r *Req) Str(key string) string { return sanitize.Oneline(mapStr(r.Args, key), 1<<30) }
 func (r *Req) Raw(key string) string { return mapStr(r.Args, key) }
 func (r *Req) Has(key string) bool   { _, ok := r.Args[key]; return ok && r.Args[key] != nil }
 func (r *Req) OptStr(key string) (string, bool) {
@@ -206,11 +205,10 @@ func (r *Req) OptStr(key string) (string, bool) {
 	}
 	return mapStr(v, "v"), true
 }
-func (r *Req) Int64(key string) (int64, bool)   { return toInt64(r.Args[key]) }
-func (r *Req) IntDefault(key string) int64      { return int64Default(r.Args, key) }
-func (r *Req) Bool(key string) bool             { return boolOr(r.Args[key]) }
-func (r *Req) List(key string) []any            { v, _ := r.Args[key].([]any); return v }
-func (r *Req) Float(key string) (float64, bool) { return toFloat(r.Args[key]) }
+func (r *Req) Int64(key string) (int64, bool) { return toInt64(r.Args[key]) }
+func (r *Req) IntDefault(key string) int64    { return int64Default(r.Args, key) }
+func (r *Req) Bool(key string) bool           { return boolOr(r.Args[key]) }
+func (r *Req) List(key string) []any          { v, _ := r.Args[key].([]any); return v }
 
 // --- Run: the single dispatcher used by every transport ---------------------
 

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"log"
 
 	"aif/internal/config"
 )
@@ -133,12 +134,32 @@ func Init(ctx context.Context, pool *Pool, cfg *config.Config) error {
 	if _, err := pool.Exec(ctx, Schema); err != nil {
 		return err
 	}
-	if _, ok := GetMeta(ctx, pool, "salt.sha"); !ok {
-		if err := SetMeta(ctx, pool, "salt.sha", cfg.SaltHash()); err != nil {
-			return err
-		}
+	if err := checkSalt(ctx, pool, cfg); err != nil {
+		return err
 	}
 	return EnsureSystem(ctx, pool)
+}
+
+// checkSalt records the salt fingerprint on first start, and afterwards warns (loudly, on every
+// start) whenever AIF_TOKEN_SALT has changed while agent tokens exist - every one of those tokens is
+// derived from the previous salt and can no longer authenticate. The stored fingerprint is never
+// overwritten on a mismatch, so the warning persists until the salt is restored or the tokens gone.
+func checkSalt(ctx context.Context, pool *Pool, cfg *config.Config) error {
+	stored, ok := GetMeta(ctx, pool, "salt.sha")
+	if !ok {
+		return SetMeta(ctx, pool, "salt.sha", cfg.SaltHash())
+	}
+	if stored == cfg.SaltHash() {
+		return nil
+	}
+	_, found, err := QueryOneValue(ctx, pool, "SELECT 1 FROM tokens LIMIT 1")
+	if err != nil {
+		return err
+	}
+	if found {
+		log.Printf("WARNING: AIF_TOKEN_SALT changed since first start; every existing agent token is now INVALID (derived from the previous salt). Restore the original AIF_TOKEN_SALT or re-issue every token.")
+	}
+	return nil
 }
 
 // EnsureSystem creates or refreshes the service's own gatekeeper account. Idempotent.

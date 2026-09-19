@@ -245,7 +245,9 @@ func pageWindow(cur, pages, span int) []int { // int 0 sentinel would clash; use
 	return keys
 }
 
-func pageWindowHTML(cur, pages int) string {
+// pageWindowHTML renders the numbered page links. The links must carry the thread id (tid) and the
+// active limit, not the current page - using cur as the path id sent "page 2" to thread #2.
+func pageWindowHTML(tid int64, cur, pages int, limit int64) string {
 	if pages <= 1 {
 		return ""
 	}
@@ -258,7 +260,7 @@ func pageWindowHTML(cur, pages int) string {
 		if p == cur {
 			cells = append(cells, fmt.Sprintf("<span class=cur>%d</span>", p))
 		} else {
-			cells = append(cells, fmt.Sprintf("<a href=%s>%d</a>", uiLink(fmt.Sprintf("/ui/thread/%d", cur), url.Values{"page": {strconv.Itoa(p)}}), p))
+			cells = append(cells, fmt.Sprintf("<a href=%s>%d</a>", uiLink(fmt.Sprintf("/ui/thread/%d", tid), url.Values{"page": {strconv.Itoa(p)}, "limit": {strconv.FormatInt(limit, 10)}}), p))
 		}
 		prev = p
 	}
@@ -705,13 +707,14 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 	}
 	addAuthor(pin)
 	karmaByAuthor := core.AuthorKarma(req.Context(), a.pool, authors)
+	avBy := core.AvatarVersions(req.Context(), a.pool, authors)
 
 	var parts strings.Builder
 	for _, m := range messages {
 		if pin != nil && asInt(m["i"]) == asInt(pin["i"]) {
 			continue
 		}
-		parts.WriteString(a.post(m, numbers(m, asInt(m["no"])), ago(m["u"], float64(time.Now().Unix())), "msg", karmaByAuthor[str(m, "a")]))
+		parts.WriteString(a.post(m, numbers(m, asInt(m["no"])), ago(m["u"], float64(time.Now().Unix())), "msg", karmaByAuthor[str(m, "a")], avBy[str(m, "a")]))
 	}
 	nav := ""
 	if !numbered && len(messages) > 0 {
@@ -721,12 +724,12 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 	}
 	pinHTML := ""
 	if pin != nil {
-		pinHTML = a.post(pin, numbers(pin, 1), "thread description", "msg pin", karmaByAuthor[str(pin, "a")])
+		pinHTML = a.post(pin, numbers(pin, 1), "thread description", "msg pin", karmaByAuthor[str(pin, "a")], avBy[str(pin, "a")])
 	}
 	bar := ""
 	if numbered && pages > 1 {
 		bar = `<div class=pager>` + fmt.Sprintf(`<a href=%s>&laquo; first</a>`, uiLink(fmt.Sprintf("/ui/thread/%d", id), url.Values{"limit": {strconv.FormatInt(asInt(data["limit"]), 10)}})) +
-			pageWindowHTML(pageNo, pages) +
+			pageWindowHTML(id, pageNo, pages, asInt(data["limit"])) +
 			fmt.Sprintf(`%s <span class=meta>page %d of %d &middot; %d posts</span></div>`,
 				mapString(pageNo < pages, fmt.Sprintf(`<a href=%s>next &rarr;</a>`, uiLink(fmt.Sprintf("/ui/thread/%d", id), url.Values{"page": {strconv.Itoa(pageNo + 1)}, "limit": {strconv.FormatInt(asInt(data["limit"]), 10)}})), ""),
 				pageNo, pages, total)
@@ -753,7 +756,7 @@ func numbers(m map[string]any, pos int64) string {
 
 // post renders one post. The `via` relay marker (this account wrote it on the author's behalf) is
 // shown as a badge - one of the two additions the Go UI ships over the Python baseline.
-func (a *App) post(m map[string]any, badge, when, css string, karma int64) string {
+func (a *App) post(m map[string]any, badge, when, css string, karma, av int64) string {
 	var files []string
 	for _, f := range uiRows(m["fl"]) {
 		files = append(files, fmt.Sprintf(` <a href=%s>%s</a> (%dB)`, uiLink("/ui/files/"+strconv.FormatInt(asInt(f["i"]), 10), nil), esc(str(f, "n")), asInt(f["s"])))
@@ -776,7 +779,7 @@ func (a *App) post(m map[string]any, badge, when, css string, karma int64) strin
 	if li, di := asInt(m["likes"]), asInt(m["dislikes"]); li > 0 || di > 0 {
 		votesHTML = fmt.Sprintf(`<div class=votes title="reactions"><span class=up>👍 %d</span> <span class=down>👎 %d</span></div>`, li, di)
 	}
-	whoCard := fmt.Sprintf(`<div class=who-card><img class=av src="/ui/avatar/%s" width=64 height=64 alt=%q loading=lazy><span class=who-name>%s</span>%s</div>`, esc(name), name, esc(name), karmaChip(karma))
+	whoCard := fmt.Sprintf(`<div class=who-card><img class=av src="/ui/avatar/%s?v=%d" width=64 height=64 alt=%q loading=lazy><span class=who-name>%s</span>%s</div>`, esc(name), av, name, esc(name), karmaChip(karma))
 	return fmt.Sprintf(`<div class=%q id="m-%d">%s<div class=post-main>%s<div class=body>%s</div>%s%s</div></div>`,
 		css, asInt(m["i"]), whoCard, meta, bodyHTML(str(m, "b")), fileHTML, votesHTML)
 }
@@ -813,8 +816,14 @@ func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	now := float64(time.Now().Unix())
+	agList := uiRows(data["a"])
+	names := make([]string, 0, len(agList))
+	for _, ag := range agList {
+		names = append(names, str(ag, "n"))
+	}
+	avBy := core.AvatarVersions(req.Context(), a.pool, names)
 	var rows strings.Builder
-	for _, ag := range uiRows(data["a"]) {
+	for _, ag := range agList {
 		on := asInt(ag["on"]) != 0
 		cls := "off"
 		status := "offline"
@@ -822,8 +831,8 @@ func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 			cls = "on"
 			status = "online"
 		}
-		rows.WriteString(fmt.Sprintf("<tr><td><img class=av src=\"/ui/avatar/%s\" width=32 height=32 alt=\"\" loading=lazy></td><td>%s</td><td class=%s>%s</td><td class=n>%d</td><td class=n title=%q>%s</td></tr>",
-			esc(str(ag, "n")), esc(str(ag, "n")), cls, status, asInt(ag["msgs"]), stamp(ag["seen"]), ago(ag["seen"], now)))
+		rows.WriteString(fmt.Sprintf("<tr><td><img class=av src=\"/ui/avatar/%s?v=%d\" width=32 height=32 alt=\"\" loading=lazy></td><td>%s</td><td class=%s>%s</td><td class=n>%d</td><td class=n title=%q>%s</td></tr>",
+			esc(str(ag, "n")), avBy[str(ag, "n")], esc(str(ag, "n")), cls, status, asInt(ag["msgs"]), stamp(ag["seen"]), ago(ag["seen"], now)))
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan=5 class=meta>No agents registered yet.</td></tr>`)

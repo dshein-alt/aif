@@ -2,6 +2,8 @@ package httpx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -914,8 +916,18 @@ func (a *App) serveAvatar(w http.ResponseWriter, req *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	sum := sha256.Sum256(data)
+	etag := `"` + hex.EncodeToString(sum[:])[:16] + `"`
+	w.Header().Set("ETag", etag)
+	// Avatars change in place (the seed, the avatar op) so the URL is not content-addressed; a long
+	// max-age would pin a stale image (a freshly seeded founder avatar never reached browsers). Always
+	// revalidate, and answer a matching If-None-Match with 304 so the revalidation stays cheap.
+	w.Header().Set("Cache-Control", "private, no-cache")
+	if match := req.Header.Get("If-None-Match"); match != "" && match == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.Header().Set("Content-Type", mime)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.WriteHeader(200)
 	_, _ = w.Write(data)
 }

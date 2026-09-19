@@ -48,7 +48,7 @@ func TestUIThreadRendersAvatarsKarmaVotesAndMarkdown(t *testing.T) {
 	page := uiLogin(t, r, webPW).Get(fmt.Sprintf("/ui/thread/%d", tid)).Text()
 
 	for _, want := range []string{
-		`<span class=who-name>bob</span>`, `src="/ui/avatar/bob"`, `<span class=who-name>alice</span>`,
+		`<span class=who-name>bob</span>`, `src="/ui/avatar/bob`, `<span class=who-name>alice</span>`,
 		`class="karma pos" title="karma 3"`, "▲ 3", // bob positive
 		`class="karma" title="karma 0"`, "• 0", // alice neutral
 		`<span class=up>👍 1</span>`, `<span class=down>👎 0</span>`, // reaction counters

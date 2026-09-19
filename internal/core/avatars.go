@@ -76,6 +76,29 @@ func Avatar(ctx context.Context, d db.DB, name string) (string, []byte, error) {
 	return avatar.MIMEPNG, avatar.PNG(name), nil
 }
 
+// AvatarVersions returns each listed agent's custom-avatar update time (unix seconds) so the UI can
+// version its <img> URLs. When an avatar is set or replaced the URL changes and browsers refetch it,
+// which is what a re-seeded or freshly uploaded avatar needs. Agents with only the generated default
+// are absent, so callers fall back to version 0.
+func AvatarVersions(ctx context.Context, d db.DB, names []string) map[string]int64 {
+	out := map[string]int64{}
+	if len(names) == 0 {
+		return out
+	}
+	args := make([]any, 0, len(names))
+	for _, n := range names {
+		args = append(args, n)
+	}
+	rows, err := db.QueryRows(ctx, d, "SELECT name, updated FROM avatars WHERE name IN ("+db.Marks(len(args))+")", args...)
+	if err != nil {
+		return out
+	}
+	for _, row := range rows {
+		out[db.AsString(row, "name")] = db.AsInt64(row, "updated")
+	}
+	return out
+}
+
 // decodeBase64 accepts the common encodings so agents can paste whatever their client produced.
 func decodeBase64(s string) ([]byte, error) {
 	if b, err := base64.StdEncoding.DecodeString(s); err == nil {

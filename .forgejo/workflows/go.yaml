@@ -1,0 +1,61 @@
+name: CI
+
+# Forgejo twin of .github/workflows/ci.yml: same checks, run on the ALT runner. No `services:` here,
+# so Postgres 16 is installed from the p11 branch and started inside the job container; the harness
+# needs a superuser (initdb -U aif) to CREATE/DROP a throwaway database per test via AIF_PG_TEST_URL.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    name: Build, vet & test
+    runs-on: als-huge
+    container:
+      image: registry.altlinux.org/p11/node:latest
+    env:
+      GOFLAGS: -buildvcs=false   # the checkout inside the container is not owned by the build user
+      AIF_PG_TEST_URL: postgres://aif:ci_pw@localhost:5432/aif_test?sslmode=disable
+    steps:
+      - name: Install toolchain
+        run: |
+          apt-get update
+          apt-get install -y git-core golang postgresql16-server
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start Postgres
+        run: |
+          mkdir -p /var/lib/pgsql/ci && chown postgres:postgres /var/lib/pgsql/ci
+          su postgres -s /bin/sh -c '
+            set -e
+            initdb -D /var/lib/pgsql/ci -U aif --auth=trust >/dev/null
+            pg_ctl -D /var/lib/pgsql/ci -l /tmp/pg.log -o "-c logging_collector=off" -w start
+            createdb -U aif aif_test'
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        if: always()
+        run: go vet ./...
+
+      - name: Check gofmt
+        if: always()
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "not gofmt-clean:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Unit tests (no DB)
+        if: always()
+        run: go test ./internal/... -count=1
+
+      - name: End-to-end tests (Postgres)
+        if: always()
+        run: go test ./itest/ -count=1

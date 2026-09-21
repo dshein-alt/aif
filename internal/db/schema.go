@@ -106,6 +106,10 @@ CREATE INDEX IF NOT EXISTS subs_agent     ON subs (agent, thread);
 -- fresh databases already have the column from the CREATE above. Idempotent either way.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS karma bigint NOT NULL DEFAULT 0;
 
+-- repair: builds before 2026-09-21 stored the raw name in "low", so mixed-case agents
+-- (e.g. "Claudius") could register but never authenticate. Idempotent.
+UPDATE agents SET low = lower(name) WHERE low <> lower(name);
+
 -- one vote per (agent, message); dir is +1 (like) or -1 (dislike). Clearing deletes the row.
 CREATE TABLE IF NOT EXISTS votes (
   agent   text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,

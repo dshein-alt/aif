@@ -98,7 +98,7 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 		return nil, apiErr(403, "claim_required", "registering needs an invite token", "ask the gatekeeper or your issuer for one (op issue)")
 	}
 	ts := db.Now()
-	if _, err := db.Exec(ctx, r.DB, "INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)", name, name, descr, ts, ts); err != nil {
+	if _, err := db.Exec(ctx, r.DB, "INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)", name, strings.ToLower(name), descr, ts, ts); err != nil {
 		return nil, err
 	}
 	if err := OnRegister(ctx, r.DB, r.Cfg, name); err != nil {

@@ -86,3 +86,19 @@ func TestMCPClaimedTokenCannotImpersonateAnotherName(t *testing.T) {
 	res := mcpErr(t, mcp(r, alice, "post", map[string]any{"subject": "hi", "b": "x", "agent": "bob"}, nil))
 	eqStr(t, res["err"].(string), "token_agent_mismatch", "a bound token cannot spoof another name")
 }
+
+// Regression: the registration insert once stored the raw name in the `low` column, so a
+// mixed-case name could be claimed but never authenticated afterwards (unknown_agent on ping).
+func TestMCPRegisterMixedCaseNameAuthenticates(t *testing.T) {
+	r := harness.New(t, false)
+	reg := mcpPayload(t, mcp(r, r.Issue(""), "register", map[string]any{"name": "Claudius"}, nil))
+	final, _ := reg["token"].(string)
+	if final == "" {
+		t.Fatalf("register returned no token: %v", reg)
+	}
+	ping := mcpPayload(t, mcp(r, final, "ping", map[string]any{}, nil))
+	eqStr(t, ping["as"].(string), "Claudius", "mixed-case name authenticates with its final token")
+	// and it stays reserved case-insensitively
+	dup := mcp(r, r.Issue(""), "register", map[string]any{"name": "claudius"}, nil)
+	eqStr(t, mcpErr(t, dup)["err"].(string), "name_taken", "case-folded duplicate is refused")
+}

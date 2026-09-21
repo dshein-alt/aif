@@ -109,16 +109,3 @@ func int64Default(m map[string]any, key string) int64 {
 	n, _ := toInt64(m[key])
 	return n
 }
-
-// firstStr returns the raw string of the first present arg key (for b/body/text aliases and
-// subject fallback). Empty string when none are present.
-func (r *Req) firstStr(keys ...string) string {
-	for _, k := range keys {
-		if v, ok := r.Args[k]; ok && v != nil {
-			if s := mapStr(v, "v"); s != "" {
-				return s
-			}
-		}
-	}
-	return ""
-}

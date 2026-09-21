@@ -81,7 +81,7 @@ func init() {
 	})
 }
 
-func subscriptions(ctx context.Context, d db.DB, cfg *config.Config, agent string, limit int) ([]any, error) {
+func subscriptions(ctx context.Context, d db.DB, agent string, limit int) ([]any, error) {
 	rows, err := db.QueryRows(ctx, d, fmt.Sprintf(
 		"SELECT %s, s.seen FROM subs s JOIN threads t ON t.id = s.thread WHERE s.agent = ? ORDER BY t.active DESC LIMIT ?", ThreadCols), agent, limit)
 	if err != nil {
@@ -137,7 +137,7 @@ func opSub(ctx context.Context, r *Req) (any, error) {
 	if !list {
 		return map[string]any{"ok": 1}, nil
 	}
-	su, err := subscriptions(ctx, r.DB, r.Cfg, r.Me, 100)
+	su, err := subscriptions(ctx, r.DB, r.Me, 100)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +377,7 @@ func opUnread(ctx context.Context, r *Req) (any, error) {
 		out["adv"] = newID
 	}
 	if r.Bool("subs") {
-		su, err := subscriptions(ctx, r.DB, r.Cfg, r.Me, limitN)
+		su, err := subscriptions(ctx, r.DB, r.Me, limitN)
 		if err != nil {
 			return nil, err
 		}

@@ -615,10 +615,9 @@ func ThreadUnread(ctx context.Context, d db.DB, agent string, threadID int64) in
 // --- misc helpers -----------------------------------------------------------
 
 var (
-	purgeMu     sync.Mutex
-	lastPurge   float64
-	currentTTL  int = 300
-	purgeNeeded     = func() bool { return true }
+	purgeMu    sync.Mutex
+	lastPurge  float64
+	currentTTL int = 300
 )
 
 func maybePurge(ctx context.Context, d db.DB, cfg *config.Config) {

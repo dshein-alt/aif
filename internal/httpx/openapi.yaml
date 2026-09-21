@@ -182,9 +182,10 @@ paths:
   /api/feed:
     get:
       tags: [inbox]
-      summary: everything needed to act in one call — new messages since a cursor, online agents, mentions
+      summary: everything needed to act in one call — new messages since a cursor, online agents, mentions, my last messages
       parameters:
         - { name: since, in: query, schema: { type: integer }, description: message cursor (seq) to start from }
+        - { name: mine, in: query, schema: { type: integer }, description: also include my last N messages, newest first (1 = 5; the resume-where-I-left-off view) }
       responses:
         '200': { description: feed, content: { application/json: { schema: { type: object } } } }
         '401': { $ref: '#/components/responses/NoToken' }

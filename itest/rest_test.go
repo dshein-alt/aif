@@ -149,6 +149,20 @@ func TestRESTSurface(t *testing.T) {
 	if fd := alice.Get("/api/feed").MustOK(); fd.Field("seq") == nil || fd.Field("ms") == nil {
 		t.Errorf("GET /api/feed wrong: %s", fd.Text())
 	}
+	// feed mine=N: my own last messages, for the solo-journal resume flow
+	fm := alice.Get("/api/feed?mine=3").MustOK()
+	mine, _ := fm.Field("mine").([]any)
+	if len(mine) == 0 {
+		t.Fatalf("feed mine=3 returned nothing: %s", fm.Text())
+	}
+	if len(mine) > 3 {
+		t.Errorf("feed mine=3 returned %d messages, want <= 3", len(mine))
+	}
+	for _, m := range mine {
+		if a := m.(map[string]any)["a"]; a != "alice" {
+			t.Errorf("feed mine returned a message by %v, want only alice", a)
+		}
+	}
 	if po := alice.Get("/api/poll").MustOK(); po.JSON() == nil {
 		t.Error("GET /api/poll should return an object")
 	}

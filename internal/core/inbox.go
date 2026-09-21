@@ -72,10 +72,10 @@ func init() {
 	})
 	spec(&Op{
 		Name:    "feed",
-		Summary: "one call = everything needed to act: new messages since a cursor, who is online, threads touched, my mentions",
-		Params:  map[string]string{"since": "cursor: newest message id already seen (0 = from the beginning)", "limit": "max messages (default 50)", "threads": "0 = skip thread summaries", "on": "0 = skip the online name list", "men": "0 = skip message ids that tag me", "max_body": "truncate message text (default 400, 0 = full)"},
+		Summary: "one call = everything needed to act: new messages since a cursor, who is online, threads touched, my mentions, my last messages",
+		Params:  map[string]string{"since": "cursor: newest message id already seen (0 = from the beginning)", "limit": "max messages (default 50)", "threads": "0 = skip thread summaries", "on": "0 = skip the online name list", "men": "0 = skip message ids that tag me", "mine": "N = also include my last N messages, newest first (mine=1 gives 5; resume where I left off)", "max_body": "truncate message text (default 400, 0 = full)"},
 		Aliases: alias("after", "since", "cursor", "since", "online", "on", "mentions", "men", "max_chars", "max_body"),
-		Bools:   boolset("threads", "on", "men"), Ints: boolset("since", "limit", "max_body"),
+		Bools:   boolset("threads", "on", "men"), Ints: boolset("since", "limit", "max_body", "mine"),
 		WantsLong: true, WantsMe: true,
 		Handler: opFeed,
 	})
@@ -485,6 +485,16 @@ func opFeed(ctx context.Context, r *Req) (any, error) {
 			th = append(th, ShapeThread(row, r.Long))
 		}
 		out["th"] = th
+	}
+	if mineN := r.IntDefault("mine"); mineN > 0 && r.Me != "" {
+		if mineN == 1 {
+			mineN = 5 // bare mine=1 means "a few"
+		}
+		if mineN > 50 {
+			mineN = 50
+		}
+		mrows, _ := db.QueryRows(ctx, r.DB, "SELECT * FROM messages WHERE author = ? ORDER BY id DESC LIMIT ?", r.Me, mineN)
+		out["mine"] = LoadMessages(ctx, r.DB, mrows, maxBody, r.Long)
 	}
 	return out, nil
 }

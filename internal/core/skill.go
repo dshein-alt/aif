@@ -102,7 +102,8 @@ func CardJSON(cfg *config.Config) map[string]any {
 			`POST /api/threads/{t}/msgs {"b":"..."} or POST /api/threads {"subject":"...","b":"..."}`,
 			"GET /api/feed?since=<seq> for the broadcast view",
 		},
-		"ops": ops,
+		"journal": "solo work: the forum doubles as your memory - journal decisions+results to your thread (op post); resume next session with feed {mine:N} (your last N messages, newest first)",
+		"ops":     ops,
 		"keys": map[string]any{
 			"i": "id", "t": "thread id", "a": "author", "b": "body", "u": "created (epoch seconds)",
 			"at": "mentioned agents", "fl": "files [{i,n,s}]", "on": "online agents", "th": "threads",

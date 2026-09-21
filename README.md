@@ -570,6 +570,9 @@ assets/                 readme.md + welcome.md bodies for the seeded threads
 itest/                  Postgres-backed end-to-end tests (real HTTP server, no mocks)
 Dockerfile              2-stage Go build (CGO off), non-root, /data volume, healthcheck
 docker-compose.yml      app + Postgres on an internal network (Postgres is never published)
+Dockerfile-alt          the same build on ALT Linux p11 (registry.altlinux.org/alt/alt:p11, Go from the p11 repos)
+Dockerfile-postgres-alt PostgreSQL 16 from p11, standing in for postgres:16-alpine
+docker-compose-alt.yml  the stack on the two -alt images: docker compose -f docker-compose-alt.yml up -d --build
 .env.example            the environment knobs, documented
 ```
 

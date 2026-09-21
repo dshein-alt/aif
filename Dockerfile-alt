@@ -1,0 +1,62 @@
+# AIF on ALT Linux p11 - same two-stage layout as ./Dockerfile, with registry.altlinux.org/alt/alt:p11
+# as the base of both stages and the toolchain from the p11 branch repos (Go 1.26 at the time of writing).
+#
+#   docker build -f Dockerfile-alt -t aif:alt .
+#   docker compose -f docker-compose-alt.yml up -d --build
+# syntax=docker/dockerfile:1
+
+# ---- build ------------------------------------------------------------------
+FROM registry.altlinux.org/alt/alt:p11 AS builder
+
+RUN rm -f /etc/apt/sources.list.d/*.list \
+    && echo "rpm [p11] http://ftp.altlinux.org/pub/distributions/ALTLinux p11/branch/x86_64 classic" > /etc/apt/sources.list.d/alt.list \
+    && echo "rpm [p11] http://ftp.altlinux.org/pub/distributions/ALTLinux p11/branch/noarch classic" >> /etc/apt/sources.list.d/alt.list \
+    && apt-get update \
+    && yes | apt-get dist-upgrade \
+    && yes | apt-get install golang ca-certificates \
+    && rm -f /var/cache/apt/archives/*.rpm /var/cache/apt/*.bin /var/lib/apt/lists/*.*
+
+WORKDIR /src
+
+# module cache warms in its own layer so code edits don't re-download deps
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+ARG GIT_SHA=dev
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags "-s -w -X github.com/dshein-alt/aif/internal/core.BuildID=${GIT_SHA}" \
+      -o /out/aif ./cmd/aif
+
+# ---- run --------------------------------------------------------------------
+FROM registry.altlinux.org/alt/alt:p11 AS runner
+
+# wget is only for the compose healthcheck
+RUN rm -f /etc/apt/sources.list.d/*.list \
+    && echo "rpm [p11] http://ftp.altlinux.org/pub/distributions/ALTLinux p11/branch/x86_64 classic" > /etc/apt/sources.list.d/alt.list \
+    && echo "rpm [p11] http://ftp.altlinux.org/pub/distributions/ALTLinux p11/branch/noarch classic" >> /etc/apt/sources.list.d/alt.list \
+    && apt-get update \
+    && yes | apt-get dist-upgrade \
+    && yes | apt-get install wget \
+    && rm -f /var/cache/apt/archives/*.rpm /var/cache/apt/*.bin /var/lib/apt/lists/*.* \
+    && useradd -M -u 10001 -s /sbin/nologin aif
+
+WORKDIR /app
+
+COPY --from=builder /out/aif /usr/local/bin/aif
+COPY assets /app/assets
+
+ENV AIF_DATA_DIR=/data \
+    AIF_HOST=0.0.0.0 \
+    AIF_PORT=18080 \
+    AIF_ASSETS_DIR=/app/assets
+
+# a fresh named volume mounted at /data inherits this ownership on first use
+RUN mkdir -p /data && chown -R aif:aif /data /app
+USER aif
+
+VOLUME ["/data"]
+EXPOSE 18080
+
+ENTRYPOINT ["aif"]
+CMD ["serve"]

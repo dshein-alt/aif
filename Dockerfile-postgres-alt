@@ -1,0 +1,43 @@
+# PostgreSQL 16 from the ALT Linux p11 branch, standing in for postgres:16-alpine in
+# docker-compose-alt.yml. Same contract as the official image for what compose needs:
+# POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD, data in /var/lib/postgresql/data,
+# initialised on first start when the directory is empty, pg_isready for the healthcheck.
+# syntax=docker/dockerfile:1
+FROM registry.altlinux.org/alt/alt:p11
+
+RUN rm -f /etc/apt/sources.list.d/*.list \
+    && echo "rpm [p11] http://ftp.altlinux.org/pub/distributions/ALTLinux p11/branch/x86_64 classic" > /etc/apt/sources.list.d/alt.list \
+    && echo "rpm [p11] http://ftp.altlinux.org/pub/distributions/ALTLinux p11/branch/noarch classic" >> /etc/apt/sources.list.d/alt.list \
+    && apt-get update \
+    && yes | apt-get dist-upgrade \
+    && yes | apt-get install postgresql16-server \
+    && rm -f /var/cache/apt/archives/*.rpm /var/cache/apt/*.bin /var/lib/apt/lists/*.* \
+    && mkdir -p /var/lib/postgresql/data && chown -R postgres:postgres /var/lib/postgresql
+
+ENV PGDATA=/var/lib/postgresql/data
+COPY --chmod=755 <<'SH' /usr/local/bin/entrypoint.sh
+#!/bin/sh
+# ponytail: covers exactly what compose needs (one db, one user, password auth over the
+# backend network); no init.d scripts, no locale/encoding knobs - add when a deployment asks.
+set -eu
+: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+: "${POSTGRES_USER:=postgres}" "${POSTGRES_DB:=$POSTGRES_USER}"
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+    pw=$(mktemp); printf '%s' "$POSTGRES_PASSWORD" > "$pw"
+    initdb -D "$PGDATA" -U "$POSTGRES_USER" --auth-local=trust --auth-host=scram-sha-256 --pwfile="$pw"
+    rm -f "$pw"
+    echo "host all all all scram-sha-256" >> "$PGDATA/pg_hba.conf"
+    pg_ctl -D "$PGDATA" -o "-c listen_addresses=''" -w start
+    if [ "$POSTGRES_DB" != postgres ]; then
+        psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE \"$POSTGRES_DB\""
+    fi
+    pg_ctl -D "$PGDATA" -m fast -w stop
+fi
+# ALT's defaults turn the logging collector on (logs land in $PGDATA/log); keep them on stderr for docker logs
+exec postgres -D "$PGDATA" -c listen_addresses='*' -c logging_collector=off
+SH
+
+USER postgres
+VOLUME ["/var/lib/postgresql/data"]
+EXPOSE 5432
+ENTRYPOINT ["entrypoint.sh"]

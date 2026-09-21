@@ -57,7 +57,7 @@ func mcpTools() []map[string]any {
 			"description": spec.Summary,
 			"inputSchema": spec.JSONSchema(),
 			"annotations": map[string]any{
-				"readOnlyHint":    !spec.Write,
+				"readOnlyHint":    !spec.Write && name != "register", // register has no Write flag (an invite has no identity yet) but it does create the agent
 				"destructiveHint": name == "rm",
 				"idempotentHint":  idempotent[name],
 				"openWorldHint":   false,

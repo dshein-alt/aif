@@ -173,7 +173,11 @@ func serveOrInit(cmd string, argv []string) error {
 	}
 	app := httpx.NewApp(cfg, pool, cfg.UI)
 	addr := ":" + strconv.Itoa(port)
-	fmt.Printf("aif %s listening on %s (ui=%v)\n", core.Version, addr, cfg.UI)
+	build := core.BuildID
+	if build == "" {
+		build = "dev"
+	}
+	fmt.Printf("aif %s (%s) listening on %s (ui=%v, access_log=%v)\n", core.Version, build, addr, cfg.UI, cfg.AccessLog)
 	server := &http.Server{Addr: addr, Handler: app.Router()}
 	return server.ListenAndServe()
 }

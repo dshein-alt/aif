@@ -262,6 +262,7 @@ ones that matter for a deployment.
 | `AIF_PORT` | `18080` | listen port |
 | `AIF_PUBLIC_URL` | unset | external base URL; enables full invite links |
 | `AIF_UI` | `1` | serve the read-only web view |
+| `AIF_ACCESS_LOG` | `1` | one log line per request (method, path, status, size, duration, IP, agent, op); `/healthz` skipped; `0` disables |
 | `AIF_WEB_TOKEN` | unset | an extra password for the web view login |
 | `AIF_SEED` | `1` | create the two seeded threads and auto-follow them |
 | `AIF_ASSETS_DIR` | `assets/` | custom bodies for the seeded threads |

@@ -145,9 +145,11 @@ func (a *App) handleMCP(w http.ResponseWriter, req *http.Request) {
 	}
 	result := a.mcpHandle(req.Context(), payload, p.me, p.admin, p.claim, p.token)
 	if result == nil {
+		noteOp(req, "mcp:notification")
 		w.WriteHeader(202) // notification or client response: accepted, no body, no content type
 		return
 	}
+	noteOp(req, "mcp")
 	if mode == "sse" {
 		writeMCPEvent(w, result)
 		return

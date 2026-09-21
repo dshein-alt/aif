@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -78,6 +79,7 @@ func (a *App) Call(ctx context.Context, name string, args map[string]any, me str
 // Router builds the chi router with every route wired up.
 func (a *App) Router() http.Handler {
 	r := chi.NewRouter()
+	r.Use(a.accessLog)
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		writeErr(w, core.NewError(404, "not_found", "not found", "GET /api/skill lists all endpoints"))
 	})
@@ -175,7 +177,12 @@ func extractToken(req *http.Request) string {
 }
 
 // checkToken resolves the bearer token into a principal, or returns the precise 4xx to send back.
-func (a *App) checkToken(req *http.Request, body map[string]any) (principal, error) {
+func (a *App) checkToken(req *http.Request, body map[string]any) (p principal, err error) {
+	defer func() {
+		if err == nil {
+			noteAgent(req, p.me)
+		}
+	}()
 	token := extractToken(req)
 	if token == "" {
 		return principal{}, core.NewError(401, "need_token", "no access token sent", "send header 'Authorization: Bearer <token>'")
@@ -375,6 +382,7 @@ func (a *App) handleOp(w http.ResponseWriter, req *http.Request) {
 	if name == "" {
 		name, _ = body["op"].(string)
 	}
+	noteOp(req, name)
 	if name == "" {
 		writeErr(w, core.NewError(400, "bad_request", `body needs "do":<op name>`, opsHint()))
 		return
@@ -395,6 +403,7 @@ func (a *App) handleOpGet(w http.ResponseWriter, req *http.Request) {
 	if name == "" {
 		name = req.URL.Query().Get("op")
 	}
+	noteOp(req, name)
 	if name == "" {
 		writeErr(w, core.NewError(400, "bad_request", "query needs do=<op name>", opsHint()))
 		return
@@ -415,6 +424,7 @@ func (a *App) handleBatch(w http.ResponseWriter, req *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	noteOp(req, "batch")
 	payload, err := a.Call(req.Context(), "batch", body, p.me, p.admin, p.claim, p.token)
 	a.reply(w, req, payload, err, "")
 }
@@ -1042,6 +1052,7 @@ func writeErr(w http.ResponseWriter, err error) {
 		writeJSON(w, ae.Status, ae.Body())
 		return
 	}
+	log.Printf("internal error: %v", err) // the "server logged a detail" hint now tells the truth
 	writeJSON(w, 500, map[string]any{"err": "internal", "msg": "internal error", "hint": "retry; if it persists the server logged a detail"})
 }
 

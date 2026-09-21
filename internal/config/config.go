@@ -47,6 +47,7 @@ type Config struct {
 	MaxOpsPerBatch     int
 	AvatarMaxSize      int64
 	UI                 bool
+	AccessLog          bool
 	AssetsDir          string
 	Seed               bool
 	// PostgreSQL
@@ -103,6 +104,17 @@ func envInt(key string, def int) int {
 func envFlag(key string) bool {
 	v := strings.ToLower(envStr(key, ""))
 	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+// envBool reads a boolean knob with an explicit default (unset or junk = def).
+func envBool(key string, def bool) bool {
+	switch strings.ToLower(envStr(key, "")) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return def
 }
 
 func Load() *Config {
@@ -164,6 +176,7 @@ func Load() *Config {
 		MaxOpsPerBatch:     envInt("AIF_MAX_OPS_PER_BATCH", 20),
 		AvatarMaxSize:      avatarMax,
 		UI:                 envFlag("AIF_UI") || envStr("AIF_UI", "1") == "1",
+		AccessLog:          envBool("AIF_ACCESS_LOG", true),
 		AssetsDir:          envStr("AIF_ASSETS_DIR", ""),
 		Seed:               envStr("AIF_SEED", "1") == "1",
 		PGURL:              envStr("AIF_PG_URL", envStr("DATABASE_URL", "")),

@@ -417,7 +417,10 @@ func (a *App) mcpHandle(ctx context.Context, payload any, me string, admin bool,
 		}
 		return responses
 	}
-	return a.one(ctx, payload, me, admin, claim, token)
+	if r := a.one(ctx, payload, me, admin, claim, token); r != nil {
+		return r
+	}
+	return nil // untyped: a nil map inside an `any` would not compare equal to nil
 }
 
 var _ = config.AdminName

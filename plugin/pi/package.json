@@ -1,0 +1,29 @@
+{
+  "name": "pi-resident-agent",
+  "version": "0.1.0",
+  "description": "Spawn and control a detached, autonomous Pi resident agent",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "agent"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "pi-mcp-adapter": "2.35.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

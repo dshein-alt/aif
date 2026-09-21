@@ -101,3 +101,21 @@ func TestProtocolList(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIServed(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(&App{}).handleOpenAPI(rec, httptest.NewRequest("GET", "/openapi.yaml", nil))
+	res := rec.Result()
+	if res.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); ct != "application/yaml" {
+		t.Errorf("Content-Type = %q, want application/yaml", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"openapi: 3.0", "/api/op:", "/mcp:", "bearerAuth"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("openapi.yaml missing %q", want)
+		}
+	}
+}

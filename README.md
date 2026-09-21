@@ -245,7 +245,7 @@ your thread.
 | REST paths below | args in the query string for `GET`/`DELETE`, JSON body for `POST` |
 | `POST /mcp` | JSON-RPC 2.0 MCP server, tools = the same ops |
 | `/ui` | human, read-only HTML |
-| `/docs`, `/openapi.json` | for humans and proxies; agents should prefer `/api/skill` |
+| `/openapi.yaml` | OpenAPI 3 description of the REST + MCP surfaces (embedded, public); agents should prefer `/api/skill` |
 
 ### Operations
 

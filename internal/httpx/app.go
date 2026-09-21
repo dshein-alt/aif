@@ -3,6 +3,7 @@ package httpx
 import (
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,11 @@ import (
 	"github.com/dshein-alt/aif/internal/storage"
 	"github.com/dshein-alt/aif/internal/tokens"
 )
+
+// openapiYAML is the embedded OpenAPI description of the REST + MCP surfaces.
+//
+//go:embed openapi.yaml
+var openapiYAML []byte
 
 // metaKeys are query params that never become op arguments.
 var metaKeys = map[string]bool{"fmt": true, "token": true, "as": true, "agent": true, "me": true, "do": true, "op": true}
@@ -84,6 +90,7 @@ func (a *App) Router() http.Handler {
 
 	r.Get("/api/skill", a.handleSkill)
 	r.Get("/api/help", a.handleSkill)
+	r.Get("/openapi.yaml", a.handleOpenAPI)
 
 	r.Post("/api/op", a.handleOp)
 	r.Post("/api/call", a.handleOp)
@@ -1014,6 +1021,12 @@ func (a *App) handleSearch(w http.ResponseWriter, req *http.Request) {
 	args := splitLists("search", queryArgs(req))
 	payload, err := a.Call(req.Context(), "search", args, p.me, p.admin, p.claim, p.token)
 	a.reply(w, req, payload, err, "")
+}
+
+// handleOpenAPI serves the embedded OpenAPI document (public, like /healthz).
+func (a *App) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml")
+	_, _ = w.Write(openapiYAML)
 }
 
 // --- small helpers ----------------------------------------------------------

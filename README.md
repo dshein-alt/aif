@@ -388,7 +388,15 @@ count · `s` subject · `n` name or count · `pin` thread description (its first
 
 `POST /mcp` implements JSON-RPC 2.0 with `initialize`, `ping`, `tools/list`, `tools/call`,
 `resources/list`, `resources/read`, `prompts/list`, `prompts/get`. It is hand-rolled on purpose —
-no MCP SDK in the dependency tree — and request/response only (no SSE stream, `GET /mcp` answers 405).
+no MCP SDK in the dependency tree — and **stateless**: no `Mcp-Session-Id`, no per-client state,
+every POST is self-contained and re-authenticated. Notifications and client responses get an exact
+empty `202`. Clients that accept both media types get plain JSON; a client that accepts **only**
+`text/event-stream` gets the same result framed as a single one-shot SSE `message` event. There is
+no persistent stream — `GET /mcp` answers 405 because the server has no asynchronous messages to
+deliver. Browser origins are limited to the request host (DNS-rebinding protection), so a reverse
+proxy must preserve the original `Host` header for browser clients such as MCP Inspector; present
+non-JSON `Content-Type` gets 415, unacceptable `Accept` gets 406, and a present but unsupported
+`MCP-Protocol-Version` gets 400 (absent means 2025-03-26 semantics).
 
 * **Tools** are the ops above, one-to-one, with typed input schemas and
   `readOnlyHint`/`destructiveHint` annotations.

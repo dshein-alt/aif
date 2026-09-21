@@ -2,7 +2,15 @@ package httpx
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime"
+	"net"
+	"net/http"
+	"net/url"
 	"sort"
+	"strings"
 
 	"github.com/dshein-alt/aif/internal/config"
 	"github.com/dshein-alt/aif/internal/core"
@@ -85,6 +93,139 @@ func mcpPrompts() []map[string]any {
 			},
 		},
 	}
+}
+
+// --- HTTP transport for /mcp --------------------------------------------------
+//
+// Stateless Streamable HTTP: every POST is a self-contained JSON-RPC 2.0 exchange.
+// No Mcp-Session-Id, no persistent GET stream (405): there is no server-originated
+// message to deliver, so a stream would only ever carry keepalives.
+
+func (a *App) handleMCP(w http.ResponseWriter, req *http.Request) {
+	if !validMCPOrigin(req.Header.Get("Origin"), req.Host) {
+		writeJSON(w, 403, map[string]any{"err": "bad_origin", "msg": "Origin is malformed or names another host", "hint": "browser clients are limited to same-host origins (DNS-rebinding protection); reverse proxies must preserve the Host header"})
+		return
+	}
+	p, err := a.checkToken(req, nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if ct := req.Header.Get("Content-Type"); ct != "" {
+		mt, _, perr := mime.ParseMediaType(ct)
+		if perr != nil || mt != "application/json" {
+			writeJSON(w, 415, map[string]any{"err": "unsupported_media", "msg": "Content-Type must be application/json", "hint": "parameters like charset=utf-8 are fine"})
+			return
+		}
+	}
+	if pv := req.Header.Get("MCP-Protocol-Version"); pv != "" && !protocols[pv] {
+		writeJSON(w, 400, map[string]any{"err": "unsupported_protocol", "msg": "unsupported MCP-Protocol-Version " + quote(pv), "hint": "supported: " + strings.Join(protocolList(), ", ")})
+		return
+	}
+	mode := mcpResponseMode(req.Header.Get("Accept"))
+	if mode == "" {
+		writeJSON(w, 406, map[string]any{"err": "not_acceptable", "msg": "Accept allows neither application/json nor text/event-stream", "hint": "send Accept: application/json (preferred) or text/event-stream"})
+		return
+	}
+	raw, err := io.ReadAll(req.Body)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var payload any
+	if strings.TrimSpace(string(raw)) == "" {
+		payload = map[string]any{"method": "", "id": nil}
+	} else if err := json.Unmarshal(raw, &payload); err != nil {
+		writeJSON(w, 400, map[string]any{"jsonrpc": rpcVersion, "error": map[string]any{"code": -32700, "message": "parse error: body is not JSON"}, "id": nil})
+		return
+	}
+	result := a.mcpHandle(req.Context(), payload, p.me, p.admin, p.claim, p.token)
+	if result == nil {
+		w.WriteHeader(202) // notification or client response: accepted, no body, no content type
+		return
+	}
+	if mode == "sse" {
+		writeMCPEvent(w, result)
+		return
+	}
+	writeJSON(w, 200, result)
+}
+
+func (a *App) handleMCPGet(w http.ResponseWriter, req *http.Request) {
+	writeJSON(w, 405, map[string]any{"err": "no_stream", "msg": "this MCP endpoint is request/response only (no SSE stream)", "hint": "POST JSON-RPC 2.0 to /mcp; tools/list then tools/call"})
+}
+
+// validMCPOrigin enforces same-host origins on browser requests (DNS-rebinding
+// protection). An absent Origin (curl, MCP stdio-to-HTTP bridges) is fine; a
+// present one must parse as an absolute URL whose host matches the request host.
+// Forwarded/X-Forwarded-Host are deliberately not trusted: there is no
+// trusted-proxy configuration.
+func validMCPOrigin(origin, reqHost string) bool {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false // malformed, opaque ("null"), or non-HTTP origin
+	}
+	return strings.EqualFold(u.Hostname(), hostOnly(reqHost))
+}
+
+func hostOnly(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
+}
+
+// mcpResponseMode picks the response representation from Accept: "json" when
+// JSON is acceptable (preferred even when SSE is too), "sse" when only
+// text/event-stream is, or "" when neither (the caller answers 406). A missing
+// Accept means */*; a media range with q=0 does not count.
+func mcpResponseMode(accept string) string {
+	accept = strings.TrimSpace(accept)
+	if accept == "" {
+		return "json"
+	}
+	jsonOK, sseOK := false, false
+	for _, part := range strings.Split(accept, ",") {
+		mt, params, err := mime.ParseMediaType(strings.TrimSpace(part))
+		if err != nil || params["q"] == "0" {
+			continue
+		}
+		switch mt {
+		case "application/json", "application/*", "*/*":
+			jsonOK = true
+		case "text/event-stream", "text/*":
+			sseOK = true
+		}
+	}
+	if jsonOK {
+		return "json"
+	}
+	if sseOK {
+		return "sse"
+	}
+	return ""
+}
+
+// writeMCPEvent frames one JSON-RPC result as a single SSE message event and
+// closes the response: one-shot SSE, no goroutine, no keepalive, no replay.
+func writeMCPEvent(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(200)
+	_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", Compact(v))
+}
+
+func protocolList() []string {
+	out := make([]string, 0, len(protocols))
+	for p := range protocols {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // opResult runs one op for MCP; returns (payload, isError).

@@ -1003,7 +1003,7 @@ func (a *App) handleFileAttach(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": 1, "fl": fl})
 }
 
-// --- search & mcp -----------------------------------------------------------
+// --- search -----------------------------------------------------------------
 
 func (a *App) handleSearch(w http.ResponseWriter, req *http.Request) {
 	p, err := a.checkToken(req, nil)
@@ -1014,36 +1014,6 @@ func (a *App) handleSearch(w http.ResponseWriter, req *http.Request) {
 	args := splitLists("search", queryArgs(req))
 	payload, err := a.Call(req.Context(), "search", args, p.me, p.admin, p.claim, p.token)
 	a.reply(w, req, payload, err, "")
-}
-
-func (a *App) handleMCP(w http.ResponseWriter, req *http.Request) {
-	p, err := a.checkToken(req, nil)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	raw, err := io.ReadAll(req.Body)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	var payload any
-	if strings.TrimSpace(string(raw)) == "" {
-		payload = map[string]any{"method": "", "id": nil}
-	} else if err := json.Unmarshal(raw, &payload); err != nil {
-		writeJSON(w, 400, map[string]any{"jsonrpc": rpcVersion, "error": map[string]any{"code": -32700, "message": "parse error: body is not JSON"}, "id": nil})
-		return
-	}
-	result := a.mcpHandle(req.Context(), payload, p.me, p.admin, p.claim, p.token)
-	if result == nil {
-		w.WriteHeader(202)
-		return
-	}
-	writeJSON(w, 200, result)
-}
-
-func (a *App) handleMCPGet(w http.ResponseWriter, req *http.Request) {
-	writeJSON(w, 405, map[string]any{"err": "no_stream", "msg": "this MCP endpoint is request/response only (no SSE stream)", "hint": "POST JSON-RPC 2.0 to /mcp; tools/list then tools/call"})
 }
 
 // --- small helpers ----------------------------------------------------------

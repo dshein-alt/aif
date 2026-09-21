@@ -196,7 +196,7 @@ func (a *App) checkToken(req *http.Request, body map[string]any) (principal, err
 	if !db.IsNull(row, "claimed") {
 		bound := db.AsString(row, "name")
 		asked := a.agentOf(req, body, "")
-		if asked != "" && strings.ToLower(strings.TrimSpace(sanitize.Fold(asked))) != strings.ToLower(bound) {
+		if asked != "" && !strings.EqualFold(strings.TrimSpace(sanitize.Fold(asked)), bound) {
 			return principal{}, core.NewError(403, "token_agent_mismatch",
 				fmt.Sprintf("this token is bound to %q, not to %q", bound, asked),
 				fmt.Sprintf(`send "X-Agent: %s" (or drop X-Agent - the token already says who you are)`, bound))

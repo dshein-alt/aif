@@ -363,7 +363,7 @@ func (a *App) sessionSalt(ctx context.Context, d db.DB, create bool) string {
 
 func sessionSign(salt, kind, subject string, exp int64) string {
 	mac := hmac.New(sha256.New, []byte(salt))
-	mac.Write([]byte(fmt.Sprintf("%s:%s:%d", kind, subject, exp)))
+	mac.Write(fmt.Appendf(nil, "%s:%s:%d", kind, subject, exp))
 	return hex.EncodeToString(mac.Sum(nil))[:sessionHMACLen]
 }
 

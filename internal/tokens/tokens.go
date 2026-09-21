@@ -29,7 +29,7 @@ func IsLive(row map[string]any, ts float64) bool {
 
 // DeriveToken returns the deterministic token for a (name, nonce) pair under this server's salt.
 func DeriveToken(salt, name, nonce string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s", salt, name, nonce)))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%s\x00%s", salt, name, nonce))
 	return "aif_" + hex.EncodeToString(sum[:])[:TokenLen]
 }
 

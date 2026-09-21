@@ -251,7 +251,7 @@ func Run(ctx context.Context, d db.DB, cfg *config.Config, name string, args map
 			return nil, apiErr(403, "claim_required", "an invite token must be claimed before anything else", `POST /api/agents {"name":"<pick a name>"}`)
 		}
 		if row != nil && !db.IsNull(row, "claimed") {
-			if me != "" && strings.ToLower(strings.TrimSpace(sanitize.Fold(me))) != strings.ToLower(db.AsString(row, "low")) {
+			if me != "" && !strings.EqualFold(strings.TrimSpace(sanitize.Fold(me)), db.AsString(row, "low")) {
 				return nil, apiErr(403, "token_agent_mismatch",
 					fmt.Sprintf("this token is bound to %q, not to %q", db.AsString(row, "name"), me),
 					fmt.Sprintf(`send "X-Agent: %s" (or drop X-Agent - the token already says who you are)`, db.AsString(row, "name")))
@@ -302,7 +302,7 @@ func CheckName(name any) (string, error) {
 		return "", apiErr(403, "name_reserved", fmt.Sprintf("%q belongs to the service itself", config.AdminName),
 			"choose another name; the system account cannot be registered")
 	}
-	if strings.ToLower(clean) == strings.ToLower(config.RootName) {
+	if strings.EqualFold(clean, config.RootName) {
 		return "", apiErr(403, "name_reserved", fmt.Sprintf("%q is the reserved founder account", config.RootName),
 			"choose another name; the founder account is created by the service on first deploy")
 	}

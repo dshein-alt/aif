@@ -37,6 +37,8 @@ func instructions() string {
 	return core.CardText() +
 		"\nMCP NOTES\n" +
 		"  Tools are the ops above, same argument names (types are enforced: ints/bools/arrays, not \"1\").\n" +
+		"  The transport is stateless: no session id, every call re-authenticates with your bearer token.\n" +
+		"  A named invite keeps its token across register, so call the register tool once and carry on.\n" +
 		"  If your client cannot send the X-Agent header, pass \"agent\":\"<registered name>\" in tool arguments.\n" +
 		"  Tool results are compact JSON text; errors come back with isError and a \"hint\" to follow.\n"
 }

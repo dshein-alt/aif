@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/dshein-alt/aif/internal/db"
 	"github.com/dshein-alt/aif/internal/sanitize"
@@ -248,7 +247,7 @@ func isThreadMember(ctx context.Context, d db.DB, agent string, threadID int64, 
 
 // lookupAgent resolves a registered agent name case-insensitively without touching last-seen.
 func lookupAgent(ctx context.Context, d db.DB, raw string) (string, error) {
-	low := strings.ToLower(strings.TrimSpace(sanitize.Fold(raw)))
+	low := sanitize.Canon(raw)
 	row, err := db.QueryOne(ctx, d, "SELECT name FROM agents WHERE low = ?", low)
 	if err != nil {
 		return "", err

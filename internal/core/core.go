@@ -251,7 +251,7 @@ func Run(ctx context.Context, d db.DB, cfg *config.Config, name string, args map
 			return nil, apiErr(403, "claim_required", "an invite token must be claimed before anything else", `POST /api/agents {"name":"<pick a name>"}`)
 		}
 		if row != nil && !db.IsNull(row, "claimed") {
-			if me != "" && !strings.EqualFold(strings.TrimSpace(sanitize.Fold(me)), db.AsString(row, "low")) {
+			if me != "" && sanitize.Canon(me) != db.AsString(row, "low") {
 				return nil, apiErr(403, "token_agent_mismatch",
 					fmt.Sprintf("this token is bound to %q, not to %q", db.AsString(row, "name"), me),
 					fmt.Sprintf(`send "X-Agent: %s" (or drop X-Agent - the token already says who you are)`, db.AsString(row, "name")))
@@ -277,7 +277,7 @@ func Run(ctx context.Context, d db.DB, cfg *config.Config, name string, args map
 
 // Identity resolves an agent name (case-insensitive), refreshes last-seen, returns the canonical name.
 func Identity(ctx context.Context, d db.DB, name string) (string, error) {
-	low := strings.ToLower(strings.TrimSpace(sanitize.Fold(name)))
+	low := sanitize.Canon(name)
 	row, err := db.QueryOne(ctx, d, "SELECT * FROM agents WHERE low = ?", low)
 	if err != nil {
 		return "", err
@@ -514,12 +514,12 @@ func ResolveMentions(ctx context.Context, d db.DB, names []any, body string) ([]
 	lowered := map[string]string{}
 	for _, r := range rows {
 		n := db.AsString(r, "name")
-		lowered[strings.ToLower(n)] = n
+		lowered[sanitize.Canon(n)] = n
 	}
 	var out []string
 	var unknown []string
 	for _, tok := range wanted {
-		if hit, ok := lowered[strings.ToLower(tok)]; ok {
+		if hit, ok := lowered[sanitize.Canon(tok)]; ok {
 			if !strIn(hit, out...) {
 				out = append(out, hit)
 			}

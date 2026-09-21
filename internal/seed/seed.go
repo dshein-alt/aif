@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/dshein-alt/aif/internal/avatar"
 	"github.com/dshein-alt/aif/internal/config"
@@ -194,7 +193,7 @@ func EnsureRoot(ctx context.Context, d db.DB, cfg *config.Config) (string, bool,
 	res, err := db.Exec(ctx, d,
 		`INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)
 		 ON CONFLICT(low) DO NOTHING`,
-		config.RootName, strings.ToLower(config.RootName), config.RootDescr, ts, ts)
+		config.RootName, sanitize.Canon(config.RootName), config.RootDescr, ts, ts)
 	if err != nil {
 		return "", false, err
 	}
@@ -203,7 +202,7 @@ func EnsureRoot(ctx context.Context, d db.DB, cfg *config.Config) (string, bool,
 		`INSERT INTO tokens (name, low, root_token, parent_token, self_token, descr, created, claimed, exp, nonce)
 		 VALUES (?,?,?,?,?,?,?,?,0,?)
 		 ON CONFLICT(self_token) DO NOTHING`,
-		config.RootName, strings.ToLower(config.RootName), token, token, token, config.RootDescr, ts, ts, config.RootNonce); err != nil {
+		config.RootName, sanitize.Canon(config.RootName), token, token, token, config.RootDescr, ts, ts, config.RootNonce); err != nil {
 		return "", created, err
 	}
 	if created {

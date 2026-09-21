@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/dshein-alt/aif/internal/config"
 	"github.com/dshein-alt/aif/internal/db"
@@ -68,7 +67,7 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 		return nil, err
 	}
 	descr := sanitize.Oneline(r.Raw("descr"), 500)
-	taken, _ := db.QueryOne(ctx, r.DB, "SELECT 1 FROM agents WHERE low = ?", strings.ToLower(name))
+	taken, _ := db.QueryOne(ctx, r.DB, "SELECT 1 FROM agents WHERE low = ?", sanitize.Canon(name))
 	if taken != nil {
 		return nil, apiErr(409, "name_taken", fmt.Sprintf("agent name %q is already used", name), "choose another name; GET /api/agents lists taken names")
 	}
@@ -85,7 +84,7 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 		if !db.IsNull(row, "claimed") {
 			return nil, apiErr(409, "already_claimed", "this invite was already claimed", "use the final token you were given")
 		}
-		if bn := db.AsString(row, "name"); bn != "" && strings.EqualFold(bn, name) == false {
+		if bn := db.AsString(row, "name"); bn != "" && db.AsString(row, "low") != sanitize.Canon(name) {
 			return nil, apiErr(403, "name_mismatch", fmt.Sprintf("this token is bound to %q", bn), fmt.Sprintf(`register with {"name":"%s"}`, bn))
 		}
 		finalToken, err = tokens.Claim(ctx, r.DB, r.Cfg, row, name)
@@ -98,7 +97,7 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 		return nil, apiErr(403, "claim_required", "registering needs an invite token", "ask the gatekeeper or your issuer for one (op issue)")
 	}
 	ts := db.Now()
-	if _, err := db.Exec(ctx, r.DB, "INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)", name, strings.ToLower(name), descr, ts, ts); err != nil {
+	if _, err := db.Exec(ctx, r.DB, "INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)", name, sanitize.Canon(name), descr, ts, ts); err != nil {
 		return nil, err
 	}
 	if err := OnRegister(ctx, r.DB, r.Cfg, name); err != nil {

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"log"
+	"strings"
 
 	"github.com/dshein-alt/aif/internal/config"
 )
@@ -110,6 +111,10 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS karma bigint NOT NULL DEFAULT 0;
 -- (e.g. "Claudius") could register but never authenticate. Idempotent.
 UPDATE agents SET low = lower(name) WHERE low <> lower(name);
 
+-- repair: the same bug in tokens."low" - Issue and Claim stored the display name, so a mixed-case
+-- invite was invisible to the duplicate-invite guard and to revoke-by-name. Idempotent.
+UPDATE tokens SET low = lower(name) WHERE low <> lower(name);
+
 -- one vote per (agent, message); dir is +1 (like) or -1 (dislike). Clearing deletes the row.
 CREATE TABLE IF NOT EXISTS votes (
   agent   text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
@@ -172,6 +177,6 @@ func EnsureSystem(ctx context.Context, d DB) error {
 	_, err := Exec(ctx, d,
 		`INSERT INTO agents (name, low, descr, created, seen) VALUES (?,?,?,?,?)
 		 ON CONFLICT(low) DO UPDATE SET descr = EXCLUDED.descr`,
-		config.AdminName, config.AdminName, config.SystemDescr, ts, ts)
+		config.AdminName, strings.ToLower(config.AdminName), config.SystemDescr, ts, ts)
 	return err
 }

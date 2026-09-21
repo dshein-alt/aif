@@ -26,6 +26,7 @@ import (
 	"github.com/dshein-alt/aif/internal/config"
 	"github.com/dshein-alt/aif/internal/core"
 	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/sanitize"
 	"github.com/dshein-alt/aif/internal/storage"
 	"github.com/dshein-alt/aif/internal/tokens"
 )
@@ -433,7 +434,7 @@ func (a *App) sessionLive(ctx context.Context, d db.DB, value string, now float6
 		}
 		row, _ := db.QueryOne(ctx, d,
 			"SELECT 1 FROM tokens WHERE id = ? AND low = ? AND claimed IS NOT NULL AND revoked IS NULL AND (exp = 0 OR exp > ?)",
-			id, strings.ToLower(name), now)
+			id, sanitize.Canon(name), now)
 		if row != nil {
 			return &uiSession{Kind: kind, Subject: name, Exp: exp}
 		}
@@ -854,7 +855,7 @@ func (a *App) handleUITokens(w http.ResponseWriter, req *http.Request) {
 	var all []map[string]any
 	var err error
 	if sess.Kind == "agent" {
-		roots, rerr := db.QueryRows(ctx, a.pool, "SELECT DISTINCT root_token FROM tokens WHERE low = ?", strings.ToLower(sess.Subject))
+		roots, rerr := db.QueryRows(ctx, a.pool, "SELECT DISTINCT root_token FROM tokens WHERE low = ?", sanitize.Canon(sess.Subject))
 		if rerr != nil {
 			a.page(w, "Error", fmt.Sprintf("<p class=meta>%s</p>", esc(rerr.Error())), sess, 500, 0)
 			return

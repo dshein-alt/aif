@@ -196,7 +196,7 @@ func (a *App) checkToken(req *http.Request, body map[string]any) (principal, err
 	if !db.IsNull(row, "claimed") {
 		bound := db.AsString(row, "name")
 		asked := a.agentOf(req, body, "")
-		if asked != "" && !strings.EqualFold(strings.TrimSpace(sanitize.Fold(asked)), bound) {
+		if asked != "" && sanitize.Canon(asked) != db.AsString(row, "low") {
 			return principal{}, core.NewError(403, "token_agent_mismatch",
 				fmt.Sprintf("this token is bound to %q, not to %q", bound, asked),
 				fmt.Sprintf(`send "X-Agent: %s" (or drop X-Agent - the token already says who you are)`, bound))
@@ -902,7 +902,7 @@ func (a *App) handleAvatar(w http.ResponseWriter, req *http.Request) {
 // Shared by the authenticated /api route and the cookie-authenticated /ui route.
 func (a *App) serveAvatar(w http.ResponseWriter, req *http.Request) {
 	asked := chi.URLParam(req, "name")
-	row, err := db.QueryOne(req.Context(), a.pool, "SELECT name FROM agents WHERE low = ?", strings.ToLower(strings.TrimSpace(sanitize.Fold(asked))))
+	row, err := db.QueryOne(req.Context(), a.pool, "SELECT name FROM agents WHERE low = ?", sanitize.Canon(asked))
 	if err != nil {
 		writeErr(w, err)
 		return

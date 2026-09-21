@@ -110,3 +110,24 @@ func TestCapLeavesShortStrings(t *testing.T) {
 		t.Error("Cap at exact length should not truncate")
 	}
 }
+
+func TestCanonIsTheOneCanonicalForm(t *testing.T) {
+	// Case is the whole point: these must all collapse to one key.
+	for _, in := range []string{"Claudius", "claudius", "CLAUDIUS", "  Claudius  "} {
+		if got := Canon(in); got != "claudius" {
+			t.Errorf("Canon(%q) = %q, want %q", in, got, "claudius")
+		}
+	}
+	// It inherits Fold, so an invisible char cannot smuggle a second "claudius" past a UNIQUE index.
+	if got := Canon("Clau​dius"); got != "claudius" {
+		t.Errorf("Canon zero-width = %q, want %q", got, "claudius")
+	}
+	// Idempotent: applying it to a stored canonical value must not move it.
+	if got := Canon(Canon(" TheRoot ")); got != "theroot" {
+		t.Errorf("Canon not idempotent: %q", got)
+	}
+	// Non-string input goes through the same path rather than panicking.
+	if got := Canon(nil); got != "" {
+		t.Errorf("Canon(nil) = %q, want empty", got)
+	}
+}

@@ -89,12 +89,12 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		reg, _ := db.QueryOne(ctx, r.DB, "SELECT 1 FROM agents WHERE low = ?", strings.ToLower(name))
+		reg, _ := db.QueryOne(ctx, r.DB, "SELECT 1 FROM agents WHERE low = ?", sanitize.Canon(name))
 		if reg != nil && !r.Admin {
 			return nil, apiErr(409, "name_registered", fmt.Sprintf("%q is already registered", name), "only the gatekeeper can bind a fresh token to a registered name (recovery)")
 		}
 		if reg == nil {
-			live, _ := db.QueryOne(ctx, r.DB, fmt.Sprintf("SELECT 1 FROM tokens WHERE low = ? AND %s", tokens.LiveSQL), strings.ToLower(name), db.Now())
+			live, _ := db.QueryOne(ctx, r.DB, fmt.Sprintf("SELECT 1 FROM tokens WHERE low = ? AND %s", tokens.LiveSQL), sanitize.Canon(name), db.Now())
 			if live != nil {
 				return nil, apiErr(409, "name_bound", fmt.Sprintf("a live invite for %q already exists", name), "revoke it first (op revoke), or issue an un-named invite")
 			}
@@ -128,7 +128,7 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 		return nil, err
 	}
 	if name != "" {
-		reg, _ := db.QueryOne(ctx, r.DB, "SELECT 1 FROM agents WHERE low = ?", strings.ToLower(name))
+		reg, _ := db.QueryOne(ctx, r.DB, "SELECT 1 FROM agents WHERE low = ?", sanitize.Canon(name))
 		if reg != nil {
 			if _, err := db.Exec(ctx, r.DB, "UPDATE tokens SET claimed = ? WHERE self_token = ?", db.Now(), made.Token); err != nil {
 				return nil, err
@@ -156,7 +156,7 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 
 func opTokens(ctx context.Context, r *Req) (any, error) {
 	ts := db.Now()
-	name := strings.ToLower(strings.TrimSpace(sanitize.Fold(r.Raw("name"))))
+	name := sanitize.Canon(r.Raw("name"))
 	dead := r.Bool("dead")
 	var rows []map[string]any
 	var err error
@@ -173,7 +173,7 @@ func opTokens(ctx context.Context, r *Req) (any, error) {
 	}
 	var live []map[string]any
 	for _, row := range rows {
-		if (dead || tokens.IsLive(row, ts)) && (name == "" || strings.EqualFold(db.AsString(row, "low"), name)) {
+		if (dead || tokens.IsLive(row, ts)) && (name == "" || db.AsString(row, "low") == name) {
 			live = append(live, row)
 		}
 	}
@@ -199,7 +199,7 @@ func opTokens(ctx context.Context, r *Req) (any, error) {
 }
 
 func opRevoke(ctx context.Context, r *Req) (any, error) {
-	name := strings.ToLower(strings.TrimSpace(sanitize.Fold(r.Raw("name"))))
+	name := sanitize.Canon(r.Raw("name"))
 	var target map[string]any
 	var err error
 	if tk := r.Raw("tk"); tk != "" {

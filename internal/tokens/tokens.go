@@ -9,6 +9,7 @@ import (
 
 	"github.com/dshein-alt/aif/internal/config"
 	"github.com/dshein-alt/aif/internal/db"
+	"github.com/dshein-alt/aif/internal/sanitize"
 )
 
 const TokenLen = 24
@@ -71,27 +72,40 @@ func Issue(ctx context.Context, d db.DB, cfg *config.Config, issuer map[string]a
 	_, err := db.Exec(ctx, d,
 		`INSERT INTO tokens (name, low, root_token, parent_token, self_token, descr, created, exp, nonce)
 		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		name, name, root, parent, token, descr, now, exp, nonce)
+		name, sanitize.Canon(name), root, parent, token, descr, now, exp, nonce)
 	if err != nil {
 		return nil, err
 	}
 	return &Issued{Token: token, Name: name, Parent: parent, Root: root, Exp: exp, Nonce: nonce}, nil
 }
 
+// BoundName is the name a claim derives its token from: the name the row was issued under for a
+// named invite, otherwise the name being claimed. It matters because the binding check in
+// opRegister compares case-insensitively, so a named invite for "bot" accepts a claim as "Bot";
+// deriving from "Bot" would mint a token the client never saw and silently break its session on
+// the very next request. An un-named invite carries no bound name, so there the claimed name is
+// the only input and the token necessarily changes.
+func BoundName(row map[string]any, claimed string) string {
+	if bound := db.AsString(row, "name"); bound != "" {
+		return bound
+	}
+	return claimed
+}
+
 // Claim binds name to a token row and rewrites self_token to the name-derived form; returns it.
 func Claim(ctx context.Context, d db.DB, cfg *config.Config, row map[string]any, name string) (string, error) {
-	final := DeriveToken(cfg.TokenSalt, name, db.AsString(row, "nonce"))
+	final := DeriveToken(cfg.TokenSalt, BoundName(row, name), db.AsString(row, "nonce"))
 	now := db.Now()
 	if db.AsString(row, "root_token") == db.AsString(row, "self_token") {
 		if _, err := db.Exec(ctx, d,
 			`UPDATE tokens SET name=?, low=?, self_token=?, claimed=?, root_token=?, parent_token=? WHERE self_token=?`,
-			name, name, final, now, final, final, db.AsString(row, "self_token")); err != nil {
+			name, sanitize.Canon(name), final, now, final, final, db.AsString(row, "self_token")); err != nil {
 			return "", err
 		}
 	} else {
 		if _, err := db.Exec(ctx, d,
 			`UPDATE tokens SET name=?, low=?, self_token=?, claimed=? WHERE self_token=?`,
-			name, name, final, now, db.AsString(row, "self_token")); err != nil {
+			name, sanitize.Canon(name), final, now, db.AsString(row, "self_token")); err != nil {
 			return "", err
 		}
 	}

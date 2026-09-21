@@ -10,6 +10,12 @@ import (
 
 func keep(ch rune) bool { return ch == '\n' || ch == '\t' || ch == ' ' }
 
+// Canon is the one definition of an agent name's canonical form: the value stored in the "low"
+// columns of agents and tokens, and the only form two names may be compared in. Names keep their
+// display case in the "name" columns; every lookup, uniqueness check and binding test goes through
+// this. Idempotent, and safe on an already-validated name (it then only lowercases).
+func Canon(v any) string { return strings.ToLower(strings.TrimSpace(Fold(v))) }
+
 // invisible: format / bidi-override / zero-width chars -> must never reach storage.
 func invisible(ch rune) bool {
 	switch {

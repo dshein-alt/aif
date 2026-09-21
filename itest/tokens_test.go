@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/dshein-alt/aif/internal/db"
 	"github.com/dshein-alt/aif/internal/harness"
 )
 
@@ -166,5 +167,65 @@ func TestTokensVisibilityPagingAndDead(t *testing.T) {
 	rows := r.Admin.Op("tokens", map[string]any{"name": "secret1", "dead": 1}).MustOK().JSON()["tk"].([]any)
 	if len(rows) == 0 || num(rows[0].(map[string]any)["revoked"]) != 1 {
 		t.Errorf("dead=1 should surface the revoked row, got %v", rows)
+	}
+}
+
+// canonLow reads the stored canonical column for a token row, straight from Postgres.
+func canonLow(t *testing.T, r *harness.Rig, selfToken string) string {
+	t.Helper()
+	row, err := db.QueryOne(context.Background(), r.Pool(), "SELECT low, name FROM tokens WHERE self_token = ?", selfToken)
+	if err != nil || row == nil {
+		t.Fatalf("no token row for %q (err %v)", selfToken, err)
+	}
+	return db.AsString(row, "low")
+}
+
+// A named invite is the only shape a long-lived MCP client can use: its token must be the same
+// string before and after the claim, whatever case the claimer types, or the client 403s on its
+// very next call with nothing in the error to explain it.
+func TestNamedInviteKeepsItsTokenAcrossClaim(t *testing.T) {
+	r := harness.New(t, false)
+
+	invite := r.Issue("mixedbot")
+	eqStr(t, canonLow(t, r, invite), "mixedbot", "issue must store the canonical name in tokens.low")
+
+	// Claim with a different case; the binding check accepts it, so the token must not move.
+	res := r.Client(invite).Post("/api/agents", map[string]any{"name": "MixedBot"})
+	res.MustOK()
+	final, _ := res.Field("token").(string)
+	eqStr(t, final, invite, "a named invite must hand back the token the client already holds")
+
+	// The original bearer still authenticates, which is the whole point.
+	r.Client(invite).Op("ping", nil).MustOK()
+	eqStr(t, canonLow(t, r, invite), "mixedbot", "claim must keep tokens.low canonical")
+
+	// An un-named invite keeps the opposite contract: claiming it mints a new token.
+	open := r.Issue("")
+	res2 := r.Client(open).Post("/api/agents", map[string]any{"name": "OtherBot"})
+	res2.MustOK()
+	fresh, _ := res2.Field("token").(string)
+	if fresh == "" || fresh == open {
+		t.Errorf("an un-named invite must mint a new token, got %q (invite %q)", fresh, open)
+	}
+	eqStr(t, canonLow(t, r, fresh), "otherbot", "claiming an un-named invite must store the canonical name")
+}
+
+// tokens.low is the canonical column, so every lookup through it has to be case-blind.
+func TestTokenLookupsAreCaseInsensitive(t *testing.T) {
+	r := harness.New(t, false)
+	r.Issue("CaseBot")
+
+	// The duplicate-invite guard reads tokens.low; a differently-cased name is the same name.
+	if got := errCode(r.Admin.Op("issue", map[string]any{"name": "casebot"})); got != "name_bound" {
+		t.Errorf("re-issue of a live invite under another case = %q, want name_bound", got)
+	}
+	// tokens {name:...} filters on the same column.
+	if tokenNamedView(t, r, "CaseBot", false) == nil {
+		t.Error("the issued token is missing from its own token tree")
+	}
+	// revoke by name queried the canonical column with the raw spelling, so this used to 404.
+	r.Admin.Op("revoke", map[string]any{"name": "casebot"}).MustOK()
+	if got := errCode(r.Admin.Op("revoke", map[string]any{"name": "CASEBOT"})); got != "no_token" {
+		t.Errorf("revoking an already-revoked token = %q, want no_token", got)
 	}
 }

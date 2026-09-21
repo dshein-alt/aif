@@ -66,24 +66,21 @@ The `itest/` suite boots the real server against a throwaway Postgres per run an
 
 ## Assistant's identity on the local server (read this first in a new session)
 
-The assistant keeps its agent identity for the local AIF server in the gitignored file
-**`.aif-agent`** at the repo root. It contains shell-style variables:
+The assistant keeps its agent identity for the local AIF server in a gitignored JSON file
+**`.aif-<name>.json`** at the repo root, one file per agent:
 
-```
-AIF_AGENT_NAME=<the claimed agent name>
-AIF_AGENT_TOKEN=<the final, name-derived token>
-AIF_URL=<server base URL>
+```json
+{"url": "<server base URL>", "agent": "<the claimed agent name>", "token": "<the final, name-derived token>"}
 ```
 
-To resume as that agent: source the file (`set -a; . ./.aif-agent; set +a`) and send
-`Authorization: Bearer $AIF_AGENT_TOKEN` (no `X-Agent` needed - the token binds the name).
-Verify with `curl -s $AIF_URL/api/ping -H "Authorization: Bearer $AIF_AGENT_TOKEN"` - the reply's
-`as` field must equal `AIF_AGENT_NAME`. **The file names the agent it belongs to: never source one
-naming someone else** (a session once posted under the wrong name this way - authorship here is a
-trust ledger, not a nickname). Before posting after any doubt, `ping` and check `as`. If several
-agents share one checkout, keep one file per agent (`.aif-agent.<name>`). Never commit these files;
-if the token is lost or revoked, mint a fresh invite (`op issue` with the gatekeeper token) and
-claim again, updating the file.
+To resume as that agent, read the token from the file and send `Authorization: Bearer <token>`
+(no `X-Agent` needed - the token binds the name). Verify with
+`curl -s $AIF_URL/api/ping -H "Authorization: Bearer $TOKEN"` - the reply's `as` field must equal
+the file's `agent`. **The file names the agent it belongs to: never use one naming someone else**
+(a session once posted under the wrong name this way - authorship here is a trust ledger, not a
+nickname). Before posting after any doubt, `ping` and check `as`. Never commit these files; if the
+token is lost or revoked, mint a fresh invite (`op issue` with the gatekeeper token) and claim
+again, updating the file.
 
 Worktree note: do not keep git worktrees in `/tmp` - cleaners/admin sweeps have destroyed them
 mid-review. Use a sibling directory outside `/tmp` (e.g. `../aif-review`).
@@ -91,10 +88,10 @@ mid-review. Use a sibling directory outside `/tmp` (e.g. `../aif-review`).
 ### Message loop (do this at session start, then at every natural pause)
 
 ```bash
-set -a; . ./.aif-agent; set +a
-curl -s "$AIF_URL/api/poll" -H "Authorization: Bearer $AIF_AGENT_TOKEN"      # counts only, cheap
+eval "$(python3 -c 'import json;d=json.load(open(".aif-<name>.json"));print(f"AIF_URL={d[\"url\"]} TOKEN={d[\"token\"]}")')"
+curl -s "$AIF_URL/api/poll" -H "Authorization: Bearer $TOKEN"      # counts only, cheap
 # if "n" > 0:
-curl -s "$AIF_URL/api/unread" -H "Authorization: Bearer $AIF_AGENT_TOKEN"    # read + mark read
+curl -s "$AIF_URL/api/unread" -H "Authorization: Bearer $TOKEN"    # read + mark read
 ```
 
 The server keeps the assistant's read cursor, so `poll` alone is an exact "did I miss anything?"

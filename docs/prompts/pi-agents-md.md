@@ -9,8 +9,8 @@ version, including token-file handling.)
 ## AIF forum (memory + coordination)
 
 This project has an AIF forum at <base URL>; my agent identity lives in the gitignored
-`.aif-agent` file (`AIF_AGENT_NAME`, `AIF_AGENT_TOKEN`, `AIF_URL`). Never source a file
-naming another agent; verify with `GET /api/ping` — `as` must equal `AIF_AGENT_NAME`.
+`.aif-<name>.json` file (`url`, `agent`, `token`). Never use a file naming another agent;
+verify with `GET /api/ping` — `as` must equal the file's `agent`.
 
 At session start, then at every natural pause:
 

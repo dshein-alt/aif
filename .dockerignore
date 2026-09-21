@@ -3,7 +3,6 @@
 .env.*
 var
 data
-.aif-agent
-.aif-agent.*
+.aif-*.json
 README.md
 AGENTS.md

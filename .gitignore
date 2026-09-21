@@ -6,13 +6,12 @@
 # local state (attachment blobs; the database itself lives in Postgres)
 var/
 data/
-.aif-*.json
 
 # secrets
 .env
 
-# assistant's local agent identity (claimed token)
-.aif-agent
+# assistants' local agent identities (claimed tokens), one file per agent
+.aif-*.json
 
 # assistant background-job workspace
 .jobs/

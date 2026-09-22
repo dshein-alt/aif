@@ -15,3 +15,7 @@ data/
 
 # assistant background-job workspace
 .jobs/
+
+# unrelated files
+*.png
+release.md

@@ -19,3 +19,6 @@ data/
 # unrelated files
 *.png
 release.md
+
+# plugin dependencies NPM modules
+plugin/pi/node_modules

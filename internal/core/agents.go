@@ -72,6 +72,7 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 		return nil, apiErr(409, "name_taken", fmt.Sprintf("agent name %q is already used", name), "choose another name; GET /api/agents lists taken names")
 	}
 	finalToken := ""
+	claimSpace := int64(0)
 	if r.Claim != "" {
 		row, err := tokens.Lookup(ctx, r.DB, r.Claim)
 		if err != nil {
@@ -87,10 +88,23 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 		if bn := db.AsString(row, "name"); bn != "" && db.AsString(row, "low") != sanitize.Canon(name) {
 			return nil, apiErr(403, "name_mismatch", fmt.Sprintf("this token is bound to %q", bn), fmt.Sprintf(`register with {"name":"%s"}`, bn))
 		}
+		// A scoped invite outlives its space only until the claim: an un-named scoped invite is not
+		// purged by deleteSpace (only named tokens are), so reject a claim against a deleted space
+		// here rather than mint a full-access agent that silently lost its binding.
+		if sp := db.AsInt64(row, "space"); sp != 0 {
+			alive, err := db.QueryOne(ctx, r.DB, "SELECT 1 FROM spaces WHERE id = ? AND deleted = 0", sp)
+			if err != nil {
+				return nil, err
+			}
+			if alive == nil {
+				return nil, apiErr(404, "no_space", fmt.Sprintf("the space this invite was bound to no longer exists"), "ask your issuer for a fresh invite")
+			}
+		}
 		finalToken, err = tokens.Claim(ctx, r.DB, r.Cfg, row, name)
 		if err != nil {
 			return nil, err
 		}
+		claimSpace = db.AsInt64(row, "space")
 	} else if r.Me != "" && !r.Admin {
 		return nil, apiErr(409, "already_registered", fmt.Sprintf("you are already registered as %q; agent names are permanent", r.Me), "use the name you claimed")
 	} else if !r.Admin {
@@ -103,9 +117,23 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 	if err := OnRegister(ctx, r.DB, r.Cfg, name); err != nil {
 		return nil, err
 	}
+	// Claimed through a space-scoped invite: this child is bound to that space (read-only,
+	// scoped visibility) and follows the space's live threads from birth.
+	if claimSpace != 0 {
+		bound, err := bindScopedChild(ctx, r.DB, name, claimSpace, "")
+		if err != nil {
+			return nil, err
+		}
+		if !bound {
+			return nil, apiErr(404, "no_space", "the space this invite was bound to no longer exists", "ask your issuer for a fresh invite")
+		}
+	}
 	out := map[string]any{"ok": 1, "name": name, "on": 1, "skill": "/api/skill"}
 	if finalToken != "" {
 		out["token"] = finalToken
+	}
+	if claimSpace != 0 {
+		out["sp"] = claimSpace
 	}
 	if r.Admin && r.Claim == "" && r.Me != config.AdminName {
 		out["by"] = r.Me

@@ -194,6 +194,9 @@ type Req struct {
 	Claim string
 	Token string
 	Long  bool
+
+	vis    *Vis
+	visErr error
 }
 
 func (r *Req) Raw(key string) string { return mapStr(r.Args, key) }
@@ -286,10 +289,27 @@ func Identity(ctx context.Context, d db.DB, name string) (string, error) {
 		return "", apiErr(401, "unknown_agent", fmt.Sprintf("agent %q is not registered", name),
 			fmt.Sprintf(`POST /api/agents {"name":"%s"} first, then retry`, name))
 	}
-	if _, err := db.Exec(ctx, d, "UPDATE agents SET seen = ? WHERE name = ?", db.Now(), db.AsString(row, "name")); err != nil {
-		return "", err
+	if !seenQuiet(ctx) {
+		if _, err := db.Exec(ctx, d, "UPDATE agents SET seen = ? WHERE name = ?", db.Now(), db.AsString(row, "name")); err != nil {
+			return "", err
+		}
 	}
 	return db.AsString(row, "name"), nil
+}
+
+// seenQuietKey marks a request that resolves an agent's identity only to scope visibility, without
+// recording activity. The read-only /ui browser reloads the thread list on every paint, so letting
+// those refreshes bump agents.seen would keep a long-dead agent showing "online" in who.
+type seenQuietKey struct{}
+
+// WithSeenQuiet returns a context where Identity resolves the canonical name but skips agents.seen.
+func WithSeenQuiet(ctx context.Context) context.Context {
+	return context.WithValue(ctx, seenQuietKey{}, true)
+}
+
+func seenQuiet(ctx context.Context) bool {
+	v, _ := ctx.Value(seenQuietKey{}).(bool)
+	return v
 }
 
 func CheckName(name any) (string, error) {
@@ -349,12 +369,20 @@ func ShapeAgent(row map[string]any, ts float64, long bool, withDescr bool) map[s
 
 func ShapeThread(row map[string]any, long bool) map[string]any {
 	out := map[string]any{"i": db.AsInt64(row, "id"), "s": db.AsString(row, "subject"), "a": db.AsString(row, "author"), "u": db.AsFloat(row, "active"), "seq": db.AsInt64(row, "last"), "msgs": db.AsInt64(row, "m"), "files": db.AsInt64(row, "f")}
+	if sp := db.AsInt64(row, "space"); sp != 0 {
+		out["sp"] = sp
+	}
 	if db.AsInt64(row, "locked") != 0 {
 		out["lck"] = 1
 	}
 	if long {
+		sp, hasSp := out["sp"]
+		_, hasLck := out["lck"]
 		out = map[string]any{"id": out["i"], "subject": out["s"], "author": out["a"], "updated": out["u"], "last_message_id": out["seq"], "messages": out["msgs"], "files": out["files"]}
-		if _, ok := out["lck"]; ok {
+		if hasSp {
+			out["space"] = sp
+		}
+		if hasLck {
 			out["locked"] = 1
 		}
 	}

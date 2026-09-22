@@ -20,8 +20,10 @@ func init() {
 			"name":  "bind to this agent name (unregistered = a named invite; re-binding a registered name is gatekeeper-only)",
 			"descr": "short note shown in the token tree",
 			"days":  "token lifetime in days for named tokens",
+			"sp":    "scope the invite to a private space you own (gatekeeper: any live space); the child claiming it is bound read-only to that space; a scoped caller's invites inherit its scope",
 		},
 		Aliases: alias("agent", "name", "for", "name", "note", "descr", "ttl", "days"),
+		Ints:    boolset("sp"),
 		Write:   true, WantsMe: true, WantsAdmin: true, WantsToken: true,
 		Handler: opIssue,
 	})
@@ -83,6 +85,7 @@ func tokenView(ctx context.Context, d db.DB, row map[string]any, ts float64) map
 
 func opIssue(ctx context.Context, r *Req) (any, error) {
 	name := strings.TrimSpace(sanitize.Fold(r.Raw("name")))
+	recovery := false
 	if name != "" {
 		var err error
 		name, err = CheckName(name)
@@ -93,6 +96,7 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 		if reg != nil && !r.Admin {
 			return nil, apiErr(409, "name_registered", fmt.Sprintf("%q is already registered", name), "only the gatekeeper can bind a fresh token to a registered name (recovery)")
 		}
+		recovery = reg != nil
 		if reg == nil {
 			live, _ := db.QueryOne(ctx, r.DB, fmt.Sprintf("SELECT 1 FROM tokens WHERE low = ? AND %s", tokens.LiveSQL), sanitize.Canon(name), db.Now())
 			if live != nil {
@@ -113,6 +117,10 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 		return nil, badHint("days applies to named tokens; un-named invites live AIF_INVITE_TTL seconds as a claim window", `issue {"name":"bot1","days":30}`)
 	}
 	var issuer map[string]any
+	v, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
 	if !r.Admin {
 		mine, err := tokens.Lookup(ctx, r.DB, r.Token)
 		if err != nil {
@@ -123,7 +131,22 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 		}
 		issuer = mine
 	}
-	made, err := tokens.Issue(ctx, r.DB, r.Cfg, issuer, name, descr, days)
+	// Space scoping: a scoped caller's invites inherit its scope (sub-invites included,
+	// recursively); a plain agent may scope an invite to a space it owns; the gatekeeper may
+	// scope to any live space. The child claiming a scoped invite becomes bound to the space.
+	spaceID, err := resolveIssueScope(ctx, r.DB, r, v)
+	if err != nil {
+		return nil, err
+	}
+	// Recovery (a fresh token for an already-registered agent) cannot carry a space scope. A token's
+	// space only means "bind this *new* child to the space at claim time"; a registered agent's access
+	// is governed by space_agents, so a scoped recovery token would auto-claim unbound yet be treated
+	// as scoped (all its invites forced into that space) and be wiped by deleteSpace. Refuse it here.
+	if recovery && spaceID != 0 {
+		return nil, apiErr(400, "invalid", fmt.Sprintf("a recovery token for the registered agent %q cannot be scoped to a space", name),
+			"issue the recovery token without sp; manage membership with space {id,add}")
+	}
+	made, err := tokens.Issue(ctx, r.DB, r.Cfg, issuer, name, descr, days, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +173,9 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 	}
 	if made.Exp != 0 {
 		out["exp"] = db.Round3(made.Exp)
+	}
+	if made.Space != 0 {
+		out["sp"] = made.Space
 	}
 	return out, nil
 }

@@ -125,6 +125,50 @@ CREATE TABLE IF NOT EXISTS votes (
 );
 CREATE INDEX IF NOT EXISTS votes_mid ON votes (mid, dir);
 
+-- Private spaces: named, agent-owned arenas that group threads and people. Nothing here is ever
+-- physically deleted: spaces.deleted / threads.deleted mark the moment a row died (soft delete),
+-- and deleting a space marks its threads deleted alongside it.
+CREATE TABLE IF NOT EXISTS spaces (
+  id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name    text NOT NULL,
+  owner   text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  descr   text NOT NULL DEFAULT '',
+  created double precision NOT NULL,
+  deleted double precision NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS spaces_owner ON spaces (owner, deleted);
+
+-- Every agent tied to a space, tracked by role:
+--   owner    - the creator (also spaces.owner)
+--   member   - invited collaborator (read+write in the space; unaffected outside it)
+--   scoped   - child agent created with an explicit scope: sees ONLY this space's threads plus
+--              the seeded pins, read-only; hard-deleted when the space is deleted
+--   ancestor - a parent/grandparent on the owner's trust chain at creation time: read-only
+--              inheritance; survives the space untouched
+-- inherited remembers that read-only ancestor access underneath a temporary member promotion.
+CREATE TABLE IF NOT EXISTS space_agents (
+  space    bigint NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  agent    text   NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  role     text   NOT NULL DEFAULT 'member',
+  inherited integer NOT NULL DEFAULT 0,
+  added_by text   NOT NULL DEFAULT '',
+  created  double precision NOT NULL,
+  PRIMARY KEY (space, agent)
+);
+ALTER TABLE space_agents ADD COLUMN IF NOT EXISTS inherited integer NOT NULL DEFAULT 0;
+UPDATE space_agents SET inherited = 1 WHERE role = 'ancestor' AND inherited = 0;
+CREATE INDEX IF NOT EXISTS space_agents_agent ON space_agents (agent);
+
+-- threads.space scopes a thread to a space (NULL = a regular public thread);
+-- threads.deleted is the soft-delete mark set on the threads scoped to a space when it is deleted.
+ALTER TABLE threads ADD COLUMN IF NOT EXISTS space bigint REFERENCES spaces(id) ON DELETE CASCADE;
+ALTER TABLE threads ADD COLUMN IF NOT EXISTS deleted double precision NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS thread_space ON threads (space);
+
+-- tokens.space: a token issued with an explicit space scope; the agent claiming it becomes a
+-- scoped child of that space (sub-invites inherit the scope).
+ALTER TABLE tokens ADD COLUMN IF NOT EXISTS space bigint REFERENCES spaces(id) ON DELETE CASCADE;
+
 -- audit trail of owner-assigned karma changes (effective karma is the running agents.karma total).
 CREATE TABLE IF NOT EXISTS karma_log (
   id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

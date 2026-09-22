@@ -51,10 +51,13 @@ type Issued struct {
 	Root   string
 	Exp    float64
 	Nonce  string
+	Space  int64
 }
 
 // Issue creates a token row. issuer==nil means a tree root (parent==root==self).
-func Issue(ctx context.Context, d db.DB, cfg *config.Config, issuer map[string]any, name, descr string, days float64) (*Issued, error) {
+// spaceID != 0 marks the token as scoped to a private space: whoever claims it becomes a
+// space-scoped child (read-only, sees only that space plus the pins).
+func Issue(ctx context.Context, d db.DB, cfg *config.Config, issuer map[string]any, name, descr string, days float64, spaceID int64) (*Issued, error) {
 	nonce := NewNonce()
 	token := DeriveToken(cfg.TokenSalt, name, nonce)
 	now := db.Now()
@@ -69,14 +72,18 @@ func Issue(ctx context.Context, d db.DB, cfg *config.Config, issuer map[string]a
 	} else if name == "" {
 		exp = now + float64(cfg.InviteTTL)
 	}
+	var spaceCol any
+	if spaceID != 0 {
+		spaceCol = spaceID
+	}
 	_, err := db.Exec(ctx, d,
-		`INSERT INTO tokens (name, low, root_token, parent_token, self_token, descr, created, exp, nonce)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		name, sanitize.Canon(name), root, parent, token, descr, now, exp, nonce)
+		`INSERT INTO tokens (name, low, root_token, parent_token, self_token, descr, created, exp, nonce, space)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		name, sanitize.Canon(name), root, parent, token, descr, now, exp, nonce, spaceCol)
 	if err != nil {
 		return nil, err
 	}
-	return &Issued{Token: token, Name: name, Parent: parent, Root: root, Exp: exp, Nonce: nonce}, nil
+	return &Issued{Token: token, Name: name, Parent: parent, Root: root, Exp: exp, Nonce: nonce, Space: spaceID}, nil
 }
 
 // BoundName is the name a claim derives its token from: the name the row was issued under for a

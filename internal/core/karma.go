@@ -67,11 +67,18 @@ func opKarma(ctx context.Context, r *Req) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	thread, err := db.QueryOne(ctx, r.DB, "SELECT id, author, locked FROM threads WHERE id = ?", tid)
+	thread, err := db.QueryOne(ctx, r.DB, "SELECT id, author, locked, space, deleted FROM threads WHERE id = ?", tid)
 	if err != nil {
 		return nil, err
 	}
-	if thread == nil {
+	if thread == nil || db.AsFloat(thread, "deleted") != 0 {
+		return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tid), "GET /api/threads?q=<word> to find threads")
+	}
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	if !vis.ThreadVisible(tid, db.AsInt64(thread, "space")) {
 		return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tid), "GET /api/threads?q=<word> to find threads")
 	}
 	if !r.Admin {
@@ -157,12 +164,22 @@ func opVote(ctx context.Context, r *Req) (any, error) {
 	if msg == nil {
 		return nil, apiErr(404, "no_message", fmt.Sprintf("message %d does not exist", mid), "GET /api/threads/{id}?msgs=1 to browse")
 	}
-	thread, err := db.QueryOne(ctx, r.DB, "SELECT author, locked FROM threads WHERE id = ?", db.AsInt64(msg, "thread"))
+	thread, err := db.QueryOne(ctx, r.DB, "SELECT author, locked, space, deleted FROM threads WHERE id = ?", db.AsInt64(msg, "thread"))
 	if err != nil {
 		return nil, err
 	}
-	if thread == nil {
+	if thread == nil || db.AsFloat(thread, "deleted") != 0 {
 		return nil, apiErr(404, "no_thread", "that message's thread no longer exists", "")
+	}
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	if vis.scoped {
+		return nil, apiErr(403, "scoped_readonly", "you are a space-scoped child: read-only, reactions are writes", "")
+	}
+	if !vis.ThreadVisible(db.AsInt64(msg, "thread"), db.AsInt64(thread, "space")) {
+		return nil, apiErr(404, "no_message", fmt.Sprintf("message %d does not exist", mid), "GET /api/threads/{id}?msgs=1 to browse")
 	}
 	if !r.Admin {
 		if db.AsInt64(thread, "locked") != 0 {

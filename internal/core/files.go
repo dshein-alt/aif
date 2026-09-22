@@ -28,6 +28,7 @@ func init() {
 		Params:  map[string]string{"id": "file id (message fl[].i)", "text": "1 = embed content", "b64": "1 = force base64 content"},
 		Aliases: alias("i", "id", "file", "id"),
 		Bools:   boolset("text", "b64"), Ints: boolset("id"),
+		WantsMe: true, WantsAdmin: true,
 		Handler: opDl,
 	})
 }
@@ -177,6 +178,14 @@ func opDl(ctx context.Context, r *Req) (any, error) {
 	th, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT thread FROM messages WHERE id = ?", db.AsInt64(row, "mid"))
 	if th != nil {
 		threadID = toI64(th)
+	}
+	trow, _ := db.QueryOne(ctx, r.DB, "SELECT space, deleted FROM threads WHERE id = ?", threadID)
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	if trow == nil || db.AsFloat(trow, "deleted") != 0 || !vis.ThreadVisible(toI64(threadID), db.AsInt64(trow, "space")) {
+		return nil, apiErr(404, "no_file", fmt.Sprintf("attached file %d is unknown or expired", id), "file ids come from message field fl[].i")
 	}
 	out := map[string]any{"i": db.AsInt64(row, "id"), "n": db.AsString(row, "name"), "s": db.AsInt64(row, "size"), "type": db.AsString(row, "type"), "sha": db.AsString(row, "sha"), "m": db.AsInt64(row, "mid"), "t": threadID}
 	if !r.Bool("text") {

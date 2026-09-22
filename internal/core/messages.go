@@ -16,8 +16,8 @@ func init() {
 		Params:    map[string]string{"id": "message id", "max_body": "truncate text to N chars"},
 		Aliases:   alias("i", "id", "message", "id"),
 		Ints:      boolset("id", "max_body"),
-		WantsLong: true,
-		Handler:   opGet,
+		WantsLong: true, WantsMe: true, WantsAdmin: true,
+		Handler: opGet,
 	})
 	spec(&Op{
 		Name:    "rm",
@@ -34,6 +34,7 @@ func init() {
 		Params:  map[string]string{"q": "text to look for", "limit": "max rows per section"},
 		Aliases: alias("query", "q"),
 		Ints:    boolset("limit"),
+		WantsMe: true, WantsAdmin: true,
 		Handler: opSearch,
 	})
 }
@@ -48,6 +49,14 @@ func opGet(ctx context.Context, r *Req) (any, error) {
 		return nil, err
 	}
 	if row == nil {
+		return nil, apiErr(404, "no_message", fmt.Sprintf("message %d does not exist", id), "GET /api/threads/{id}?msgs=1 to browse")
+	}
+	trow, _ := db.QueryOne(ctx, r.DB, "SELECT space, deleted FROM threads WHERE id = ?", db.AsInt64(row, "thread"))
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	if trow == nil || db.AsFloat(trow, "deleted") != 0 || !vis.ThreadVisible(db.AsInt64(row, "thread"), db.AsInt64(trow, "space")) {
 		return nil, apiErr(404, "no_message", fmt.Sprintf("message %d does not exist", id), "GET /api/threads/{id}?msgs=1 to browse")
 	}
 	return LoadMessages(ctx, r.DB, []map[string]any{row}, int(r.IntDefault("max_body")), r.Long)[0], nil
@@ -76,7 +85,14 @@ func opRm(ctx context.Context, r *Req) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if row == nil {
+		if row == nil || db.AsFloat(row, "deleted") != 0 {
+			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", id), "")
+		}
+		vis, err := r.Vis()
+		if err != nil {
+			return nil, err
+		}
+		if !vis.ThreadVisible(id, db.AsInt64(row, "space")) {
 			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", id), "")
 		}
 		if db.AsString(row, "author") != r.Me && !r.Admin {
@@ -97,6 +113,14 @@ func opRm(ctx context.Context, r *Req) (any, error) {
 		return nil, err
 	}
 	if msg == nil {
+		return nil, apiErr(404, "no_message", fmt.Sprintf("message %d does not exist", id), "")
+	}
+	mtrow, _ := db.QueryOne(ctx, r.DB, "SELECT space, deleted FROM threads WHERE id = ?", db.AsInt64(msg, "thread"))
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	if mtrow == nil || db.AsFloat(mtrow, "deleted") != 0 || !vis.ThreadVisible(db.AsInt64(msg, "thread"), db.AsInt64(mtrow, "space")) {
 		return nil, apiErr(404, "no_message", fmt.Sprintf("message %d does not exist", id), "")
 	}
 	if db.AsString(msg, "author") != r.Me && !r.Admin {
@@ -154,7 +178,7 @@ func opSearch(ctx context.Context, r *Req) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	threadsRes, err := opThreads(ctx, &Req{Ctx: ctx, DB: r.DB, Cfg: r.Cfg, Args: map[string]any{"q": q, "limit": int64(limitN)}})
+	threadsRes, err := opThreads(ctx, &Req{Ctx: ctx, DB: r.DB, Cfg: r.Cfg, Args: map[string]any{"q": q, "limit": int64(limitN)}, Me: r.Me, Admin: r.Admin})
 	if err != nil {
 		return nil, err
 	}

@@ -34,7 +34,7 @@ func init() {
 		Params:  map[string]string{"t": "thread id to subscribe to", "off": "1 = unsubscribe instead (with t)", "all": "1 = subscribe to every existing thread (with t absent)", "list": "0 = do not return the subscription list", "seen": "read mark for a new subscription (default: today's last message)"},
 		Aliases: alias("i", "t", "id", "t", "thread", "t", "unsubscribe", "off", "unsub", "off"),
 		Ints:    boolset("t", "seen"), Bools: boolset("off", "all", "list"),
-		Write: true, WantsMe: true,
+		Write: true, WantsMe: true, WantsAdmin: true,
 		Handler: opSub,
 	})
 	spec(&Op{
@@ -81,9 +81,11 @@ func init() {
 	})
 }
 
-func subscriptions(ctx context.Context, d db.DB, agent string, limit int) ([]any, error) {
+func subscriptions(ctx context.Context, d db.DB, v *Vis, agent string, limit int) ([]any, error) {
+	cond, condArgs := v.Cond("t")
 	rows, err := db.QueryRows(ctx, d, fmt.Sprintf(
-		"SELECT %s, s.seen FROM subs s JOIN threads t ON t.id = s.thread WHERE s.agent = ? ORDER BY t.active DESC LIMIT ?", ThreadCols), agent, limit)
+		"SELECT %s, s.seen FROM subs s JOIN threads t ON t.id = s.thread WHERE s.agent = ? AND %s ORDER BY t.active DESC LIMIT ?", ThreadCols, cond),
+		append(append([]any{agent}, condArgs...), limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -103,9 +105,13 @@ func opSub(ctx context.Context, r *Req) (any, error) {
 	all := r.Bool("all")
 	list := !r.Has("list") || r.Bool("list")
 	seen, hasSeen := r.Int64("seen")
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
 	if hasT && tid != 0 {
-		thread, _ := db.QueryOne(ctx, r.DB, "SELECT id, last FROM threads WHERE id = ?", tid)
-		if thread == nil {
+		thread, _ := db.QueryOne(ctx, r.DB, "SELECT id, last, space, deleted FROM threads WHERE id = ?", tid)
+		if thread == nil || db.AsFloat(thread, "deleted") != 0 || !vis.ThreadVisible(tid, db.AsInt64(thread, "space")) {
 			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tid), "GET /api/threads?q=<word>")
 		}
 		if off {
@@ -123,7 +129,8 @@ func opSub(ctx context.Context, r *Req) (any, error) {
 			return nil, err
 		}
 	} else if all {
-		threads, _ := db.QueryRows(ctx, r.DB, "SELECT id, last FROM threads")
+		cond, condArgs := vis.Cond("t")
+		threads, _ := db.QueryRows(ctx, r.DB, fmt.Sprintf("SELECT t.id, t.last FROM threads t WHERE %s", cond), condArgs...)
 		for _, row := range threads {
 			mark := db.AsInt64(row, "last")
 			if hasSeen {
@@ -137,7 +144,7 @@ func opSub(ctx context.Context, r *Req) (any, error) {
 	if !list {
 		return map[string]any{"ok": 1}, nil
 	}
-	su, err := subscriptions(ctx, r.DB, r.Me, 100)
+	su, err := subscriptions(ctx, r.DB, vis, r.Me, 100)
 	if err != nil {
 		return nil, err
 	}
@@ -196,11 +203,17 @@ func opPoll(ctx context.Context, r *Req) (any, error) {
 		return nil, err
 	}
 	mine := b2i(r.Bool("mine"))
-	params := func() []any { return []any{r.Me, cursor, mine, r.Me, r.Me, r.Me} }
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	vc, va := vis.MsgCond("m.thread")
+	inboxSQL := InboxFrom + vc
+	params := func() []any { return append([]any{r.Me, cursor, mine, r.Me, r.Me, r.Me}, va...) }
 
 	started := float64(time.Now().UnixNano()) / 1e9
 	deadline := started + waitS
-	nv, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c"+InboxFrom, params()...)
+	nv, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c"+inboxSQL, params()...)
 	n := toI64(nv)
 	for n == 0 && float64(time.Now().UnixNano())/1e9 < deadline {
 		select {
@@ -209,7 +222,7 @@ func opPoll(ctx context.Context, r *Req) (any, error) {
 			// treat cancel like a timeout: fall through to reporting with what we have
 		case <-time.After(500 * time.Millisecond):
 		}
-		nv, _, _ = db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c"+InboxFrom, params()...)
+		nv, _, _ = db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c"+inboxSQL, params()...)
 		n = toI64(nv)
 		if ctx.Err() != nil {
 			break
@@ -225,7 +238,7 @@ func opPoll(ctx context.Context, r *Req) (any, error) {
 		out["wait"] = db.Round2(elapsed)
 	}
 	menRow := append(params(), r.Me)
-	menv, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c"+InboxFrom+" AND EXISTS (SELECT 1 FROM mentions mn2 WHERE mn2.mid = m.id AND mn2.agent = ?)", menRow...)
+	menv, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c"+inboxSQL+" AND EXISTS (SELECT 1 FROM mentions mn2 WHERE mn2.mid = m.id AND mn2.agent = ?)", menRow...)
 	out["men"] = toI64(menv)
 	out["seq"] = MaxSeq(ctx, r.DB)
 	topN := 20
@@ -240,7 +253,7 @@ func opPoll(ctx context.Context, r *Req) (any, error) {
 	if topN > 200 {
 		topN = 200
 	}
-	brows, _ := db.QueryRows(ctx, r.DB, "SELECT m.thread thread, COUNT(*) c, MAX(m.id) mx"+InboxFrom+" GROUP BY m.thread ORDER BY c DESC LIMIT ?", append(params(), topN)...)
+	brows, _ := db.QueryRows(ctx, r.DB, "SELECT m.thread thread, COUNT(*) c, MAX(m.id) mx"+inboxSQL+" GROUP BY m.thread ORDER BY c DESC LIMIT ?", append(params(), topN)...)
 	var sum int64
 	for _, row := range brows {
 		sum += db.AsInt64(row, "c")
@@ -256,12 +269,12 @@ func opPoll(ctx context.Context, r *Req) (any, error) {
 		}
 	}
 	if advance && n != 0 {
-		newv, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT MAX(m.id) mx"+InboxFrom, params()...)
+		newv, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT MAX(m.id) mx"+inboxSQL, params()...)
 		newID := toI64(newv)
 		if _, err := db.Exec(ctx, r.DB, "UPDATE agents SET cursor = ? WHERE name = ?", newID, r.Me); err != nil {
 			return nil, err
 		}
-		grows, _ := db.QueryRows(ctx, r.DB, "SELECT m.thread thread, MAX(m.id) mx"+InboxFrom+" GROUP BY m.thread", params()...)
+		grows, _ := db.QueryRows(ctx, r.DB, "SELECT m.thread thread, MAX(m.id) mx"+inboxSQL+" GROUP BY m.thread", params()...)
 		for _, row := range grows {
 			if err := SetThreadSeen(ctx, r.DB, r.Me, db.AsInt64(row, "thread"), db.AsInt64(row, "mx")); err != nil {
 				return nil, err
@@ -283,7 +296,13 @@ func opUnread(ctx context.Context, r *Req) (any, error) {
 		return nil, err
 	}
 	mine := b2i(r.Bool("mine"))
-	rows, err := db.QueryRows(ctx, r.DB, "SELECT m.*"+InboxFrom+" ORDER BY m.id LIMIT ?", r.Me, cursor, mine, r.Me, r.Me, r.Me, limitN+1)
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	vc, va := vis.MsgCond("m.thread")
+	rows, err := db.QueryRows(ctx, r.DB, "SELECT m.*"+InboxFrom+vc+" ORDER BY m.id LIMIT ?",
+		append(append([]any{r.Me, cursor, mine, r.Me, r.Me, r.Me}, va...), limitN+1)...)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +396,7 @@ func opUnread(ctx context.Context, r *Req) (any, error) {
 		out["adv"] = newID
 	}
 	if r.Bool("subs") {
-		su, err := subscriptions(ctx, r.DB, r.Me, limitN)
+		su, err := subscriptions(ctx, r.DB, vis, r.Me, limitN)
 		if err != nil {
 			return nil, err
 		}
@@ -389,9 +408,13 @@ func opUnread(ctx context.Context, r *Req) (any, error) {
 func opSeen(ctx context.Context, r *Req) (any, error) {
 	out := map[string]any{"ok": 1}
 	tid, hasT := r.Int64("t")
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
 	if hasT && tid != 0 {
-		thread, _ := db.QueryOne(ctx, r.DB, "SELECT id, last FROM threads WHERE id = ?", tid)
-		if thread == nil {
+		thread, _ := db.QueryOne(ctx, r.DB, "SELECT id, last, space, deleted FROM threads WHERE id = ?", tid)
+		if thread == nil || db.AsFloat(thread, "deleted") != 0 || !vis.ThreadVisible(tid, db.AsInt64(thread, "space")) {
 			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tid), "")
 		}
 		read, hasRead := r.Int64("read")
@@ -406,7 +429,9 @@ func opSeen(ctx context.Context, r *Req) (any, error) {
 		out["thread"] = map[string]any{"i": tid, "seen": toI64(cur)}
 	}
 	if r.Bool("all") {
-		if _, err := db.Exec(ctx, r.DB, "UPDATE subs SET seen = (SELECT last FROM threads WHERE threads.id = subs.thread) WHERE agent = ?", r.Me); err != nil {
+		cond, condArgs := vis.MsgCond("subs.thread")
+		if _, err := db.Exec(ctx, r.DB, "UPDATE subs SET seen = (SELECT last FROM threads WHERE threads.id = subs.thread) WHERE agent = ?"+cond,
+			append([]any{r.Me}, condArgs...)...); err != nil {
 			return nil, err
 		}
 		out["all"] = 1
@@ -437,7 +462,12 @@ func opFeed(ctx context.Context, r *Req) (any, error) {
 		since = 0
 	}
 	ts := db.Now()
-	rows, err := db.QueryRows(ctx, r.DB, "SELECT * FROM messages WHERE id > ? ORDER BY id LIMIT ?", since, limitN+1)
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	vc, va := vis.MsgCond("messages.thread")
+	rows, err := db.QueryRows(ctx, r.DB, "SELECT * FROM messages WHERE id > ?"+vc+" ORDER BY id LIMIT ?", append([]any{since}, append(append([]any{}, va...), limitN+1)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +509,9 @@ func opFeed(ctx context.Context, r *Req) (any, error) {
 				ids = append(ids, tid)
 			}
 		}
-		trows, _ := db.QueryRows(ctx, r.DB, fmt.Sprintf("SELECT %s FROM threads t WHERE t.id IN (%s) ORDER BY t.active DESC", ThreadCols, db.Marks(len(ids))), ids...)
+		tcond, targs := vis.Cond("t")
+		trows, _ := db.QueryRows(ctx, r.DB, fmt.Sprintf("SELECT %s FROM threads t WHERE t.id IN (%s) AND %s ORDER BY t.active DESC", ThreadCols, db.Marks(len(ids)), tcond),
+			append(append([]any{}, ids...), targs...)...)
 		th := make([]any, 0, len(trows))
 		for _, row := range trows {
 			th = append(th, ShapeThread(row, r.Long))

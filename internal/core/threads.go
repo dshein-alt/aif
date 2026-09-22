@@ -13,7 +13,7 @@ import (
 
 // ThreadCols is the SELECT list for shape_thread(); the count subselects are aliased m and f so
 // the SORTS expression ("msgs" -> "m") can order by them.
-const ThreadCols = `t.id, t.subject, t.author, t.created, t.last, t.active, t.locked,
+const ThreadCols = `t.id, t.subject, t.author, t.created, t.last, t.active, t.locked, t.space,
 	(SELECT COUNT(*) FROM messages m WHERE m.thread = t.id) m,
 	(SELECT COUNT(*) FROM files f JOIN messages m ON m.id = f.mid WHERE m.thread = t.id) f`
 
@@ -29,9 +29,10 @@ func init() {
 			"files":   `files: [{"k":upload_key}] or [{"n":name,"text":content}] to upload inline`,
 			"full":    "1 = return the stored message, not only its ids",
 			"lck":     "1 = lock the new thread (gatekeeper only)",
+			"sp":      "new thread: open it inside a private space you own (or are a member of)",
 		},
 		Aliases: alias("body", "b", "text", "b", "msg", "b", "message", "b", "thread", "t", "tag", "at", "tags", "at", "mention", "at", "mentions", "at", "s", "subject", "title", "subject", "subj", "subject", "lock", "lck", "locked", "lck"),
-		Ints:    boolset("t"), Bools: boolset("full", "lck"), Lists: boolset("at", "files"),
+		Ints:    boolset("t", "sp"), Bools: boolset("full", "lck"), Lists: boolset("at", "files"),
 		Schemas: map[string]any{"files": map[string]any{
 			"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{
 				"k":    map[string]any{"type": "string", "description": "upload key from op up / POST /api/files"},
@@ -51,11 +52,12 @@ func init() {
 			"q": "text to match in subject, author or tagged agents", "by": "filter by author name", "at": "filter by tagged agent name",
 			"sort": "active|new|id|msgs", "limit": "max rows (default 25)", "offset": "paging", "after": "only threads with id > this",
 			"lck": "1 = only locked threads", "ids": "list of thread ids: return just those headers",
+			"sp": "only threads scoped to this private space (0 = only public threads)",
 		},
 		Aliases: alias("query", "q", "search", "q", "author", "by", "tag", "at", "mentions", "at", "since", "after", "min_id", "after", "locked", "lck", "lock", "lck"),
-		Ints:    boolset("limit", "offset", "after"), Lists: boolset("ids"), Bools: boolset("lck"),
-		WantsLong: true,
-		Handler:   opThreads,
+		Ints:    boolset("limit", "offset", "after", "sp"), Lists: boolset("ids"), Bools: boolset("lck"),
+		WantsLong: true, WantsMe: true, WantsAdmin: true,
+		Handler: opThreads,
 	})
 	spec(&Op{
 		Name:    "thread",
@@ -71,7 +73,7 @@ func init() {
 		Aliases:   alias("i", "id", "thread", "id", "messages", "msgs", "after", "since", "max_chars", "max_body", "upto", "before", "pinned", "pin", "description", "pin"),
 		Bools:     boolset("msgs", "body", "files", "read", "unread", "pin", "nums"),
 		Ints:      boolset("id", "since", "before", "offset", "limit", "max_body"),
-		WantsLong: true, WantsMe: true,
+		WantsLong: true, WantsMe: true, WantsAdmin: true,
 		Handler: opThread,
 	})
 }
@@ -112,6 +114,15 @@ func opPost(ctx context.Context, r *Req) (any, error) {
 	}
 	ts := db.Now()
 	var tid, prevLast int64
+	newThread := false
+	var threadSpace int64
+	v, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	if v.scoped {
+		return nil, apiErr(403, "scoped_readonly", "you are a space-scoped child: you may read your space and the pinned threads, but write nowhere", "ask your owner or the gatekeeper to post for you")
+	}
 	subjectArg, _ := r.OptStr("subject")
 	if !r.Has("t") || toI64(r.Args["t"]) == 0 {
 		if r.Bool("lck") && !r.Admin {
@@ -131,17 +142,38 @@ func opPost(ctx context.Context, r *Req) (any, error) {
 		if r.Bool("lck") && r.Admin {
 			locked = 1
 		}
-		idv, _, err := db.QueryOneValue(ctx, r.DB, "INSERT INTO threads (subject, author, created, last, active, locked) VALUES (?,?,?,?,?,?) RETURNING id", subj, r.Me, ts, 0, ts, locked)
+		if spArg, ok := r.Int64("sp"); ok && spArg != 0 {
+			sp, err := loadSpace(ctx, r.DB, spArg, false)
+			if err != nil {
+				return nil, err
+			}
+			if sp == nil || !v.CanReadSpace(spArg) {
+				return nil, apiErr(404, "no_space", fmt.Sprintf("space %d does not exist (or is not yours to see)", spArg), "op spaces lists your spaces")
+			}
+			if !v.CanWriteSpace(spArg) {
+				return nil, apiErr(403, "space_readonly", fmt.Sprintf("space %d is read-only for you; only its owner and invited members may post there", spArg), "ask the owner to invite you (space {id,add})")
+			}
+			threadSpace = spArg
+		}
+		idv, _, err := db.QueryOneValue(ctx, r.DB, "INSERT INTO threads (subject, author, created, last, active, locked, space) VALUES (?,?,?,?,?,?,?) RETURNING id", subj, r.Me, ts, 0, ts, locked, nullInt64(threadSpace))
 		if err != nil {
 			return nil, err
 		}
 		tid = toI64(idv)
 		prevLast = 0
+		newThread = true
 	} else {
 		tidArg := toI64(r.Args["t"])
-		thread, _ := db.QueryOne(ctx, r.DB, "SELECT id, last, locked FROM threads WHERE id = ?", tidArg)
-		if thread == nil {
+		thread, _ := db.QueryOne(ctx, r.DB, "SELECT id, last, locked, space, deleted FROM threads WHERE id = ?", tidArg)
+		if thread == nil || db.AsFloat(thread, "deleted") != 0 {
 			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tidArg), "GET /api/threads?q=<word> to find threads")
+		}
+		threadSpace = db.AsInt64(thread, "space")
+		if !v.ThreadVisible(tidArg, threadSpace) {
+			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tidArg), "GET /api/threads?q=<word> to find threads")
+		}
+		if threadSpace != 0 && !v.CanWriteSpace(threadSpace) {
+			return nil, apiErr(403, "space_readonly", fmt.Sprintf("space %d is read-only for you; only its owner and invited members may post there", threadSpace), "ask the owner to invite you (space {id,add})")
 		}
 		if db.AsInt64(thread, "locked") != 0 && !r.Admin {
 			return nil, apiErr(403, "locked_thread", fmt.Sprintf("thread %d is locked; only %s may post in it", tidArg, config.AdminName), "read the pinned description for the rules, or start your own thread")
@@ -181,7 +213,23 @@ func opPost(ctx context.Context, r *Req) (any, error) {
 			return nil, err
 		}
 	}
+	// A new space thread starts followed by everyone currently tied to the space (scoped children
+	// included). This happens once: a later sub off must not be silently undone by the next reply.
+	// Agents added or scoped into the space later are subscribed by the membership/claim paths.
+	if newThread && threadSpace != 0 {
+		mrows, _ := db.QueryRows(ctx, r.DB, "SELECT agent FROM space_agents WHERE space = ?", threadSpace)
+		for _, m := range mrows {
+			if name := db.AsString(m, "agent"); name != r.Me {
+				if err := FollowThread(ctx, r.DB, name, tid, prevLast); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	out := map[string]any{"ok": 1, "i": mid, "t": tid}
+	if threadSpace != 0 {
+		out["sp"] = threadSpace
+	}
 	if len(mentions) > 0 {
 		out["at"] = mentions
 	}
@@ -230,6 +278,21 @@ func opThreads(ctx context.Context, r *Req) (any, error) {
 		where = append(where, "t.id > ?")
 		args = append(args, after)
 	}
+	if spArg, ok := r.Int64("sp"); ok {
+		if spArg == 0 {
+			where = append(where, "t.space IS NULL")
+		} else {
+			where = append(where, "t.space = ?")
+			args = append(args, spArg)
+		}
+	}
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	visCond, visArgs := vis.Cond("t")
+	where = append(where, visCond)
+	args = append(args, visArgs...)
 	wanted := strings.ToLower(r.Raw("sort"))
 	if wanted == "" {
 		wanted = "active"
@@ -256,11 +319,15 @@ func opThreads(ctx context.Context, r *Req) (any, error) {
 		if len(wantedIDs) == 0 {
 			return nil, bad("ids must be thread ids, e.g. ids=[1,2]", "GET /api/threads")
 		}
-		rows, err := db.QueryRows(ctx, r.DB, fmt.Sprintf("SELECT %s FROM threads t WHERE t.id IN (%s) ORDER BY t.id", ThreadCols, db.Marks(len(wantedIDs))), wantedIDs...)
+		rows, err := db.QueryRows(ctx, r.DB, fmt.Sprintf("SELECT %s FROM threads t WHERE t.id IN (%s) AND %s ORDER BY t.id", ThreadCols, db.Marks(len(wantedIDs)), visCond), append(append([]any{}, wantedIDs...), visArgs...)...)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"th": shapeThreadList(rows, r.Long), "n": len(rows), "offset": 0, "sort": "ids"}, nil
+		out := map[string]any{"th": shapeThreadList(rows, r.Long), "n": len(rows), "offset": 0, "sort": "ids"}
+		if dir := spaceDirectory(ctx, r.DB, rows); dir != nil {
+			out["sc"] = dir
+		}
+		return out, nil
 	}
 	seeded := seededValues(ctx, r.DB)
 	sticky := seeded
@@ -289,6 +356,9 @@ func opThreads(ctx context.Context, r *Req) (any, error) {
 	}
 	offset := int(maxI64(int64OrDefault(r.Args, "offset"), 0))
 	out := map[string]any{"th": shapeThreadList(page, r.Long), "n": len(page), "offset": offset, "sort": r.Raw("sort"), "pinned": seeded}
+	if dir := spaceDirectory(ctx, r.DB, page); dir != nil {
+		out["sc"] = dir
+	}
 	if len(page) > 0 {
 		out["next_offset"] = offset + len(page)
 	}
@@ -310,13 +380,23 @@ func opThread(ctx context.Context, r *Req) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if row == nil {
+	if row == nil || db.AsFloat(row, "deleted") != 0 {
+		return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", id), "GET /api/threads?q=<word> to find threads")
+	}
+	vis, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	if !vis.ThreadVisible(id, db.AsInt64(row, "space")) {
 		return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", id), "GET /api/threads?q=<word> to find threads")
 	}
 	mCount, fCount, _ := ThreadCounts(ctx, r.DB, id)
 	row["m"] = mCount
 	row["f"] = fCount
 	out := ShapeThread(row, r.Long)
+	if dir := spaceDirectory(ctx, r.DB, []map[string]any{row}); dir != nil {
+		out["sc"] = dir
+	}
 	withBody := !r.Has("body") || r.Bool("body")
 	pin := !r.Has("pin") || r.Bool("pin")
 	unread := r.Bool("unread")

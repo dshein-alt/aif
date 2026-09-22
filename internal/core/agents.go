@@ -167,7 +167,7 @@ func opWho(ctx context.Context, r *Req) (any, error) {
 	if offset < 0 {
 		offset = 0
 	}
-	var where []string
+	where := []string{"a.deleted = 0"}
 	var args []any
 	if on {
 		where = append(where, onlineCond("a"))
@@ -178,9 +178,10 @@ func opWho(ctx context.Context, r *Req) (any, error) {
 		args = append(args, db.LikeArg(q), db.LikeArg(q))
 	}
 	q := fmt.Sprintf(`SELECT a.name name, a.descr descr, a.seen seen, a.karma karma,
-	        (SELECT COUNT(*) FROM messages m WHERE m.author = a.name) msgs
-	        FROM agents a %s ORDER BY (a.low = ?) DESC, a.seen DESC LIMIT ? OFFSET ?`, db.Where(where))
-	rows, err := db.QueryRows(ctx, r.DB, q, append(args, config.AdminName, limitN+1, offset)...)
+	        (SELECT COUNT(*) FROM messages m WHERE m.author = a.name) msgs,
+	        (SELECT COUNT(*) FROM tokens t WHERE t.low = a.low AND t.claimed IS NOT NULL AND %s) live
+	        FROM agents a %s ORDER BY (a.low = ?) DESC, a.seen DESC LIMIT ? OFFSET ?`, tokens.LiveSQL, db.Where(where))
+	rows, err := db.QueryRows(ctx, r.DB, q, append([]any{ts}, append(args, config.AdminName, limitN+1, offset)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -192,11 +193,11 @@ func opWho(ctx context.Context, r *Req) (any, error) {
 	for _, row := range rows {
 		agents = append(agents, ShapeAgent(row, ts, r.Long, withDescr))
 	}
-	onlineV, _, err := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c FROM agents WHERE "+onlineCond(""), ts-float64(r.Cfg.AgentTTL), config.AdminName)
+	onlineV, _, err := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c FROM agents WHERE deleted = 0 AND "+onlineCond(""), ts-float64(r.Cfg.AgentTTL), config.AdminName)
 	if err != nil {
 		return nil, err
 	}
-	totalV, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c FROM agents")
+	totalV, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c FROM agents WHERE deleted = 0")
 	return map[string]any{"a": agents, "n": len(agents), "total": toI64(totalV), "online": toI64(onlineV), "ttl": r.Cfg.AgentTTL}, nil
 }
 

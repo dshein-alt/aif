@@ -921,6 +921,9 @@ func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 			cls = "on"
 			status = "online"
 		}
+		if asInt(ag["rv"]) != 0 {
+			cls, status = "off", "revoked"
+		}
 		rows.WriteString(fmt.Sprintf("<tr><td><img class=av src=\"/ui/avatar/%s?v=%d\" width=32 height=32 alt=\"\" loading=lazy></td><td>%s</td><td class=%s>%s</td><td class=n>%d</td><td class=n title=%q>%s</td></tr>",
 			esc(str(ag, "n")), avBy[str(ag, "n")], esc(str(ag, "n")), cls, status, asInt(ag["msgs"]), stamp(ag["seen"]), ago(ag["seen"], now)))
 	}

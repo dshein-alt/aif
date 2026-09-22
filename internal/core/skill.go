@@ -37,7 +37,7 @@ func CardJSON(cfg *config.Config) map[string]any {
 		"bad_request", "need_token", "need_agent", "unknown_agent", "name_taken", "not_yours",
 		"no_thread", "no_message", "no_file", "unknown_upload", "upload_attached", "empty_message",
 		"need_subject", "unknown_agents", "too_large", "blob_missing", "unknown_op", "bad_json", "bad_token",
-		"not_thread_owner", "not_participant", "not_member", "karma_negative", "self_vote", "locked_thread", "name_reserved", "claim_required", "system_account", "token_revoked", "token_expired", "invite_expired", "token_agent_mismatch",
+		"not_thread_owner", "not_participant", "not_member", "karma_negative", "self_vote", "locked_thread", "name_reserved", "agent_deleted", "claim_required", "system_account", "token_revoked", "token_expired", "invite_expired", "token_agent_mismatch",
 		"no_space", "not_space_owner", "nested_space", "bound_agent", "scoped_readonly", "space_readonly",
 	}
 	sort.Strings(codes)

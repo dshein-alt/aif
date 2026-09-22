@@ -38,9 +38,10 @@ func init() {
 	})
 	spec(&Op{
 		Name:    "revoke",
-		Summary: "revoke a token together with its whole subtree (cascade); you must be an ancestor of it, or the gatekeeper",
-		Params:  map[string]string{"name": "bound name of the token to revoke", "tk": "or the raw token itself"},
+		Summary: "revoke a token together with its whole subtree (cascade); you must be an ancestor of it, or gatekeeper/TheRoot. final=1 also retires the agent for good",
+		Params:  map[string]string{"name": "bound name of the token to revoke", "tk": "or the raw token itself", "final": "1 = retire the agent: name stays taken, gone from listings, no recovery"},
 		Aliases: alias("agent", "name"),
+		Bools:   boolset("final"),
 		Write:   true, WantsMe: true, WantsAdmin: true, WantsToken: true,
 		Handler: opRevoke,
 	})
@@ -83,6 +84,11 @@ func tokenView(ctx context.Context, d db.DB, row map[string]any, ts float64) map
 	return out
 }
 
+// IsOperator: the gatekeeper and the founder TheRoot manage agents without the ancestry rule.
+func IsOperator(r *Req) bool {
+	return r.Admin || strings.EqualFold(r.Me, config.RootName)
+}
+
 func opIssue(ctx context.Context, r *Req) (any, error) {
 	name := strings.TrimSpace(sanitize.Fold(r.Raw("name")))
 	recovery := false
@@ -92,9 +98,12 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		reg, _ := db.QueryOne(ctx, r.DB, "SELECT 1 FROM agents WHERE low = ?", sanitize.Canon(name))
-		if reg != nil && !r.Admin {
-			return nil, apiErr(409, "name_registered", fmt.Sprintf("%q is already registered", name), "only the gatekeeper can bind a fresh token to a registered name (recovery)")
+		reg, _ := db.QueryOne(ctx, r.DB, "SELECT deleted FROM agents WHERE low = ?", sanitize.Canon(name))
+		if reg != nil && db.AsFloat(reg, "deleted") != 0 {
+			return nil, apiErr(403, "agent_deleted", fmt.Sprintf("%q was retired for good", name), "the name stays reserved; issue an invite for a new name")
+		}
+		if reg != nil && !IsOperator(r) {
+			return nil, apiErr(409, "name_registered", fmt.Sprintf("%q is already registered", name), "only the gatekeeper or TheRoot can bind a fresh token to a registered name (recovery)")
 		}
 		recovery = reg != nil
 		if reg == nil {
@@ -226,6 +235,7 @@ func opTokens(ctx context.Context, r *Req) (any, error) {
 
 func opRevoke(ctx context.Context, r *Req) (any, error) {
 	name := sanitize.Canon(r.Raw("name"))
+	final := r.Bool("final")
 	var target map[string]any
 	var err error
 	if tk := r.Raw("tk"); tk != "" {
@@ -236,18 +246,24 @@ func opRevoke(ctx context.Context, r *Req) (any, error) {
 		if target == nil {
 			return nil, apiErr(404, "no_token", "that token is not an issued agent token", "op tokens lists your subtree; revoke takes name or tk")
 		}
+		name = db.AsString(target, "low")
 	} else if name != "" {
-		target, err = db.QueryOne(ctx, r.DB, "SELECT * FROM tokens WHERE low = ? AND revoked IS NULL ORDER BY created DESC LIMIT 1", name)
+		if final && (name == sanitize.Canon(config.RootName) || name == config.AdminName) {
+			return nil, apiErr(403, "name_reserved", "that account cannot be retired", "revoke a token instead")
+		}
+		// final may follow an earlier plain revoke, so the newest token (live first) is enough to
+		// judge ancestry even when nothing live is left.
+		target, err = db.QueryOne(ctx, r.DB, "SELECT * FROM tokens WHERE low = ? ORDER BY (revoked IS NULL) DESC, created DESC LIMIT 1", name)
 		if err != nil {
 			return nil, err
 		}
-		if target == nil {
+		if target == nil || (!final && !db.IsNull(target, "revoked")) {
 			return nil, apiErr(404, "no_token", fmt.Sprintf("no live token is bound to %q", name), "op tokens lists your subtree")
 		}
 	} else {
 		return nil, badHint("revoke needs a name or tk", `revoke {"name":"bot1"}`)
 	}
-	if !r.Admin {
+	if !IsOperator(r) {
 		mine, _ := tokens.Lookup(ctx, r.DB, r.Token)
 		ok := false
 		if mine != nil {
@@ -260,8 +276,34 @@ func opRevoke(ctx context.Context, r *Req) (any, error) {
 			return nil, apiErr(403, "cannot_revoke", "you may only revoke your own token or tokens below it", "ask the gatekeeper to revoke it")
 		}
 	}
-	affected, err := tokens.RevokeSubtree(ctx, r.DB, target)
-	if err != nil {
+	var affected []string
+	if final {
+		if name == "" || name == sanitize.Canon(config.RootName) {
+			return nil, apiErr(403, "name_reserved", "that account cannot be retired", "revoke a token instead")
+		}
+		agent, err := db.QueryOne(ctx, r.DB, "SELECT name FROM agents WHERE low = ? AND deleted = 0", name)
+		if err != nil {
+			return nil, err
+		}
+		if agent == nil {
+			return nil, apiErr(404, "unknown_agent", fmt.Sprintf("no live agent is registered as %q", name), "GET /api/agents lists registered names")
+		}
+		// Every live token bound to the name goes, subtrees included, then the agent itself.
+		live, err := db.QueryRows(ctx, r.DB, fmt.Sprintf("SELECT * FROM tokens WHERE low = ? AND %s", tokens.LiveSQL), name, db.Now())
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range live {
+			got, err := tokens.RevokeSubtree(ctx, r.DB, row)
+			if err != nil {
+				return nil, err
+			}
+			affected = append(affected, got...)
+		}
+		if _, err := db.Exec(ctx, r.DB, "UPDATE agents SET deleted = ? WHERE low = ?", db.Now(), name); err != nil {
+			return nil, err
+		}
+	} else if affected, err = tokens.RevokeSubtree(ctx, r.DB, target); err != nil {
 		return nil, err
 	}
 	nameSet := map[string]bool{}
@@ -276,7 +318,11 @@ func opRevoke(ctx context.Context, r *Req) (any, error) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	return map[string]any{"ok": 1, "revoked": len(affected), "names": names}, nil
+	out := map[string]any{"ok": 1, "revoked": len(affected), "names": names}
+	if final {
+		out["final"] = 1
+	}
+	return out, nil
 }
 
 func min(a, b int) int {

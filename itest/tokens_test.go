@@ -2,10 +2,14 @@ package itest
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/dshein-alt/aif/internal/config"
 	"github.com/dshein-alt/aif/internal/db"
 	"github.com/dshein-alt/aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/seed"
+	"github.com/dshein-alt/aif/internal/tokens"
 )
 
 func tokenNamedView(t *testing.T, r *harness.Rig, name string, dead bool) map[string]any {
@@ -252,4 +256,73 @@ func TestNamedInviteSelfClaimsOnFirstUse(t *testing.T) {
 	tok, _ := again.Field("token").(string)
 	eqStr(t, tok, invite, "register after self-claim must hand back the same token")
 	eqStr(t, errCode(bot.Post("/api/agents", map[string]any{"name": "other"})), "already_registered", "a different name is still refused")
+}
+
+// founder seeds TheRoot the way a deployment does and returns a client acting as it.
+func founder(t *testing.T, r *harness.Rig) *harness.Client {
+	t.Helper()
+	if _, _, err := seed.EnsureRootOnPool(context.Background(), r.Pool(), r.Cfg); err != nil {
+		t.Fatalf("seed founder: %v", err)
+	}
+	c := r.Client(tokens.DeriveToken(r.Cfg.TokenSalt, config.RootName, config.RootNonce))
+	eqStr(t, c.Op("ping", nil).MustOK().JSON()["as"].(string), config.RootName, "founder ping")
+	return c
+}
+
+// TheRoot manages agents like the gatekeeper: recovery tokens for a registered name, and revoking
+// outside its own subtree. Ordinary agents get neither.
+func TestFounderRecoversAndRevokesAnywhere(t *testing.T) {
+	r := harness.New(t, false)
+	root := founder(t, r)
+	r.Join("bob") // issued by the gatekeeper, so not under TheRoot in the token tree
+	other := r.Join("other")
+
+	eqStr(t, errCode(other.Op("issue", map[string]any{"name": "bob"})), "name_registered", "an agent cannot mint a recovery token")
+	rec, _ := root.Op("issue", map[string]any{"name": "bob"}).MustOK().Field("token").(string)
+	eqStr(t, r.Client(rec).Op("ping", nil).MustOK().JSON()["as"].(string), "bob", "founder recovery token works at once")
+
+	eqStr(t, errCode(other.Op("revoke", map[string]any{"name": "bob"})), "cannot_revoke", "a non-ancestor still cannot revoke")
+	root.Op("revoke", map[string]any{"name": "bob"}).MustOK()
+	eqStr(t, errCode(r.Client(rec).Op("ping", nil)), "token_revoked", "founder revoke reaches outside its subtree")
+}
+
+// revoke {final:1} retires an agent for good: no listing, no tags, no recovery, name still taken.
+// It follows the ancestry rule, works after a plain revoke, and never touches the reserved accounts.
+func TestFinalRevokeRetiresAgent(t *testing.T) {
+	r := harness.New(t, true)
+	parent := r.Join("parent")
+	kidInvite := parent.Op("issue", map[string]any{"name": "kid"}).MustOK().Field("token").(string)
+	kid := r.Client(kidInvite)
+	kid.Op("ping", nil).MustOK() // named invite self-registers
+	other := r.Join("other")
+	eqStr(t, errCode(other.Op("revoke", map[string]any{"name": "kid", "final": 1})), "cannot_revoke", "final obeys the ancestry rule")
+
+	// A plain revoke first: who and the UI show the agent as revoked, but it is still listed.
+	parent.Op("revoke", map[string]any{"name": "kid"}).MustOK()
+	w := r.Admin.Op("who", map[string]any{"on": 0, "q": "kid"}).MustOK().JSON()
+	if a := w["a"].([]any); len(a) != 1 || a[0].(map[string]any)["rv"] != float64(1) {
+		t.Fatalf("who after revoke = %v, want kid with rv=1", w["a"])
+	}
+	page := uiAs(t, r, r.Tokens["other"]).Get("/ui/agents").Text()
+	if !strings.Contains(page, "kid") || !strings.Contains(page, ">revoked<") {
+		t.Fatalf("/ui/agents should list kid as revoked")
+	}
+
+	// final by the ancestor, even though no live token is left.
+	res := parent.Op("revoke", map[string]any{"name": "kid", "final": 1}).MustOK().JSON()
+	if res["final"] != float64(1) {
+		t.Fatalf("final revoke reply = %v", res)
+	}
+	w = r.Admin.Op("who", map[string]any{"on": 0, "q": "kid"}).MustOK().JSON()
+	if len(w["a"].([]any)) != 0 {
+		t.Errorf("a retired agent must vanish from who, got %v", w["a"])
+	}
+	if page := uiAs(t, r, r.Tokens["other"]).Get("/ui/agents").Text(); strings.Contains(page, ">kid<") {
+		t.Error("a retired agent must vanish from /ui/agents")
+	}
+	eqStr(t, errCode(r.Admin.Op("issue", map[string]any{"name": "kid"})), "agent_deleted", "no recovery for a retired agent, not even the gatekeeper")
+	eqStr(t, errCode(r.Client(r.Issue("")).Post("/api/agents", map[string]any{"name": "Kid"})), "name_taken", "the name stays taken")
+	eqStr(t, errCode(other.Op("post", map[string]any{"subject": "x", "b": "hi", "at": []string{"kid"}})), "unknown_agents", "a retired agent cannot be tagged")
+	eqStr(t, errCode(parent.Op("revoke", map[string]any{"name": "kid", "final": 1})), "unknown_agent", "retiring twice is refused")
+	eqStr(t, errCode(r.Admin.Op("revoke", map[string]any{"name": config.RootName, "final": 1})), "name_reserved", "the founder cannot be retired")
 }

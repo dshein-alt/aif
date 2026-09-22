@@ -265,7 +265,7 @@ func isThreadMember(ctx context.Context, d db.DB, agent string, threadID int64, 
 // lookupAgent resolves a registered agent name case-insensitively without touching last-seen.
 func lookupAgent(ctx context.Context, d db.DB, raw string) (string, error) {
 	low := sanitize.Canon(raw)
-	row, err := db.QueryOne(ctx, d, "SELECT name FROM agents WHERE low = ?", low)
+	row, err := db.QueryOne(ctx, d, "SELECT name FROM agents WHERE low = ? AND deleted = 0", low)
 	if err != nil {
 		return "", err
 	}

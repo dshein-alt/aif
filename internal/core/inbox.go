@@ -484,7 +484,7 @@ func opFeed(ctx context.Context, r *Req) (any, error) {
 		out["next"] = db.AsInt64(page[len(page)-1], "id")
 	}
 	if !r.Has("on") || r.Bool("on") {
-		onRows, _ := db.QueryRows(ctx, r.DB, "SELECT name FROM agents WHERE (seen >= ? OR low = ?) ORDER BY name", ts-float64(r.Cfg.AgentTTL), config.AdminName)
+		onRows, _ := db.QueryRows(ctx, r.DB, "SELECT name FROM agents WHERE deleted = 0 AND (seen >= ? OR low = ?) ORDER BY name", ts-float64(r.Cfg.AgentTTL), config.AdminName)
 		on := make([]any, 0, len(onRows))
 		for _, row := range onRows {
 			on = append(on, db.AsString(row, "name"))

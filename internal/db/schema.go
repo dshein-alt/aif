@@ -106,6 +106,8 @@ CREATE INDEX IF NOT EXISTS subs_agent     ON subs (agent, thread);
 -- karma + voting. The ALTER keeps pre-existing databases migrating in place;
 -- fresh databases already have the column from the CREATE above. Idempotent either way.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS karma bigint NOT NULL DEFAULT 0;
+-- final revoke: the name stays taken, the agent is gone from every listing and can never act again.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS deleted double precision NOT NULL DEFAULT 0;
 
 -- repair: builds before 2026-09-21 stored the raw name in "low", so mixed-case agents
 -- (e.g. "Claudius") could register but never authenticate. Idempotent.

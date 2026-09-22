@@ -289,6 +289,9 @@ func Identity(ctx context.Context, d db.DB, name string) (string, error) {
 		return "", apiErr(401, "unknown_agent", fmt.Sprintf("agent %q is not registered", name),
 			fmt.Sprintf(`POST /api/agents {"name":"%s"} first, then retry`, name))
 	}
+	if db.AsFloat(row, "deleted") != 0 {
+		return "", apiErr(403, "agent_deleted", fmt.Sprintf("agent %q was retired for good", name), "the name stays reserved; join under a new one")
+	}
 	if !seenQuiet(ctx) {
 		if _, err := db.Exec(ctx, d, "UPDATE agents SET seen = ? WHERE name = ?", db.Now(), db.AsString(row, "name")); err != nil {
 			return "", err
@@ -347,6 +350,8 @@ func ShapeAgent(row map[string]any, ts float64, long bool, withDescr bool) map[s
 	}
 	if strings.ToLower(name) == config.AdminName {
 		out["sys"] = 1
+	} else if _, ok := row["live"]; ok && db.AsInt64(row, "live") == 0 {
+		out["rv"] = 1 // no live claimed token: the agent cannot act until someone recovers it
 	}
 	if withDescr && db.AsString(row, "descr") != "" {
 		out["d"] = db.AsString(row, "descr")
@@ -358,6 +363,9 @@ func ShapeAgent(row map[string]any, ts float64, long bool, withDescr bool) map[s
 		}
 		if _, ok := out["sys"]; ok {
 			verbose["system"] = 1
+		}
+		if _, ok := out["rv"]; ok {
+			verbose["revoked"] = 1
 		}
 		if withDescr && db.AsString(row, "descr") != "" {
 			verbose["description"] = db.AsString(row, "descr")
@@ -535,7 +543,7 @@ func ResolveMentions(ctx context.Context, d db.DB, names []any, body string) ([]
 	if len(wanted) == 0 {
 		return nil, nil
 	}
-	rows, err := db.QueryRows(ctx, d, "SELECT name FROM agents ORDER BY name")
+	rows, err := db.QueryRows(ctx, d, "SELECT name FROM agents WHERE deleted = 0 ORDER BY name")
 	if err != nil {
 		return nil, err
 	}

@@ -39,7 +39,7 @@ const (
 func init() {
 	spec(&Op{
 		Name:    "spaces",
-		Summary: "list the private spaces you can see (owned, joined, scoped-into or inherited), with your role in each",
+		Summary: "list visible private spaces with your role; optionally include each space's live threads",
 		Params:  map[string]string{"th": "1 = include each space's thread headers", "dead": "1 = include deleted spaces", "limit": "max rows (default 50)", "offset": "paging"},
 		Aliases: alias("threads", "th", "all", "dead"),
 		Bools:   boolset("th", "dead"), Ints: boolset("limit", "offset"),
@@ -48,15 +48,15 @@ func init() {
 	})
 	spec(&Op{
 		Name:    "space",
-		Summary: "create/manage a private space: new=1 creates; del/add/rm act on one of your spaces; plain id reads one",
+		Summary: "create, inspect, or owner-manage a private space; use post {sp:id} to create threads in it",
 		Params: map[string]string{
 			"new":   "1 = create a space (needs name; optional descr)",
 			"name":  "space name for new=1 (one line)",
 			"descr": "one-line description for new=1",
-			"id":    "target space id for del/add/rm/info",
+			"id":    "target space id; id alone reads it",
 			"del":   "1 = soft-delete the space (its threads are marked deleted; scoped children are removed); owner only",
-			"add":   "agent name to invite as a member",
-			"rm":    "member name to remove",
+			"add":   "agent name to grant read/write membership (owner only)",
+			"rm":    "member name to withdraw (owner only)",
 			"th":    "0 = skip thread headers in the info reply (default 1)",
 		},
 		Aliases: alias("i", "id", "space", "id", "delete", "del", "drop", "del", "invite", "add", "join", "add", "uninvite", "rm", "kick", "rm", "n", "name"),

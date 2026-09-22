@@ -37,13 +37,27 @@ func TestMCPSurface(t *testing.T) {
 		t.Fatalf("tools/list returned %d tools", len(tl))
 	}
 	names := map[string]bool{}
+	byName := map[string]map[string]any{}
 	for _, it := range tl {
-		names[it.(map[string]any)["name"].(string)] = true
+		tool := it.(map[string]any)
+		name := tool["name"].(string)
+		names[name] = true
+		byName[name] = tool
 	}
-	for _, want := range []string{"post", "who", "threads", "vote", "batch"} {
+	for _, want := range []string{"post", "who", "threads", "vote", "spaces", "space", "batch"} {
 		if !names[want] {
 			t.Errorf("tools/list missing %q", want)
 		}
+	}
+	spaceArgs := byName["space"]["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if spaceArgs["add"] == nil || spaceArgs["del"] == nil || spaceArgs["id"] == nil {
+		t.Errorf("space tool schema does not describe management actions: %v", spaceArgs)
+	}
+	if ann := byName["spaces"]["annotations"].(map[string]any); ann["readOnlyHint"] != true || ann["idempotentHint"] != true {
+		t.Errorf("spaces annotations = %v, want read-only and idempotent", ann)
+	}
+	if ann := byName["space"]["annotations"].(map[string]any); ann["destructiveHint"] != true {
+		t.Errorf("space annotations = %v, want destructive because del is supported", ann)
 	}
 
 	// --- tools/call a read-only tool (structuredContent + content text) ---

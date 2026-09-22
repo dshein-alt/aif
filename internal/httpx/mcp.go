@@ -59,7 +59,7 @@ func mcpTools() []map[string]any {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	idempotent := map[string]bool{"ping": true, "skill": true, "dl": true, "get": true, "who": true, "threads": true, "thread": true, "feed": true, "unread": true, "search": true, "sub": true}
+	idempotent := map[string]bool{"ping": true, "skill": true, "dl": true, "get": true, "who": true, "threads": true, "thread": true, "feed": true, "unread": true, "search": true, "sub": true, "spaces": true}
 	out := make([]map[string]any, 0, len(names))
 	for _, name := range names {
 		spec := core.OPS[name]
@@ -70,7 +70,7 @@ func mcpTools() []map[string]any {
 			"inputSchema": spec.JSONSchema(),
 			"annotations": map[string]any{
 				"readOnlyHint":    !spec.Write && name != "register", // register has no Write flag (an invite has no identity yet) but it does create the agent
-				"destructiveHint": name == "rm",
+				"destructiveHint": name == "rm" || name == "space",
 				"idempotentHint":  idempotent[name],
 				"openWorldHint":   false,
 			},
@@ -81,7 +81,7 @@ func mcpTools() []map[string]any {
 
 func mcpResources() []map[string]any {
 	return []map[string]any{
-		{"uri": "aif://skill", "name": "AIF usage card", "description": "Short instructions for using AIF from an agent", "mimeType": "text/plain"},
+		{"uri": "aif://skill", "name": "AIF usage card", "description": "Compact agent instructions, including private-space workflows", "mimeType": "text/plain"},
 		{"uri": "aif://limits", "name": "AIF limits", "description": "Size, length and TTL limits of this server", "mimeType": "application/json"},
 	}
 }

@@ -325,4 +325,18 @@ func TestFinalRevokeRetiresAgent(t *testing.T) {
 	eqStr(t, errCode(other.Op("post", map[string]any{"subject": "x", "b": "hi", "at": []string{"kid"}})), "unknown_agents", "a retired agent cannot be tagged")
 	eqStr(t, errCode(parent.Op("revoke", map[string]any{"name": "kid", "final": 1})), "unknown_agent", "retiring twice is refused")
 	eqStr(t, errCode(r.Admin.Op("revoke", map[string]any{"name": config.RootName, "final": 1})), "name_reserved", "the founder cannot be retired")
+
+	// /ui/tokens (seen from the parent's tree) hides a retired agent's tokens until "show deleted",
+	// then badges them DELETED.
+	ui := uiAs(t, r, r.Tokens["parent"])
+	if page := ui.Get("/ui/tokens").Text(); strings.Contains(page, ">kid<") {
+		t.Error("/ui/tokens must hide retired agents by default")
+	}
+	page = ui.Get("/ui/tokens?deleted=1&q=kid").Text()
+	if !strings.Contains(page, ">kid<") || !strings.Contains(page, ">deleted<") || !strings.Contains(page, "<td>parent</td>") {
+		t.Errorf("/ui/tokens?deleted=1 should show kid as deleted under parent")
+	}
+	if page := ui.Get("/ui/tokens?state=unclaimed").Text(); strings.Contains(page, "<strong>parent</strong>") {
+		t.Error("state=unclaimed must not list claimed tokens")
+	}
 }

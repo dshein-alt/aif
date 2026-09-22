@@ -130,11 +130,9 @@ form.search{margin:0 0 1rem}
 form.inline{display:inline}
 button.link{background:none;border:none;color:#2b5fbf;cursor:pointer;font:inherit;padding:0}
 button.link:hover{text-decoration:underline}
-.tree ul{list-style:none;padding-left:1.4rem;margin:0;border-left:1px dotted #d8dae0}
-.tree li{margin:.15rem 0}
 .badge{font-size:.72rem;padding:0 .35rem;border-radius:.3rem;text-transform:uppercase;letter-spacing:.03em}
 .b-live{background:#12805c;color:#fff}.b-used{background:#6b7280;color:#fff}
-.b-dead{background:#9aa0aa;color:#fff}.b-unclaimed{background:#b45309;color:#fff}
+.b-dead{background:#9aa0aa;color:#fff}.b-deleted{background:#7f1d1d;color:#fff}.b-unclaimed{background:#b45309;color:#fff}
 @media (prefers-color-scheme:dark){body{background:#15171c;color:#e6e8ec}.msg,.card{background:#1c1f26}.msg{border-color:#2b2f38}.msg .who-card{border-right-color:#2b2f38}.msg .who-card .av{border-color:#3a3f4a}.pin{background:#201d2b}.pin .who-card{background:#2a2440;border-right-color:#3a2f52}th,td,nav{border-color:#2b2f38}code{background:#22262f}
 .body pre,.body code{background:#22262f}.body pre code{background:none}.body blockquote{color:#9aa0aa;border-left-color:#2b2f38}}
 details{margin:.9rem 0;border:1px solid #d8dae0;border-radius:.5rem;background:#fff}
@@ -945,67 +943,132 @@ func (a *App) handleUITokens(w http.ResponseWriter, req *http.Request) {
 	}
 	ctx := req.Context()
 	now := float64(time.Now().Unix())
-	var all []map[string]any
-	var err error
+	const limit = 50
+	offset := maxInt(queryInt(req, "offset", 0), 0)
+	q := strings.TrimSpace(req.URL.Query().Get("q"))
+	state := req.URL.Query().Get("state")
+	showDeleted := req.URL.Query().Get("deleted") == "1"
+	newest := req.URL.Query().Get("newest") == "1"
+
+	// An agent sees the trees it belongs to; cfg/web sessions see the whole forest.
+	var where []string
+	var args []any
 	if sess.Kind == "agent" {
-		roots, rerr := db.QueryRows(ctx, a.pool, "SELECT DISTINCT root_token FROM tokens WHERE low = ?", sanitize.Canon(sess.Subject))
-		if rerr != nil {
-			a.page(w, "Error", fmt.Sprintf("<p class=meta>%s</p>", esc(rerr.Error())), sess, 500, 0)
-			return
-		}
-		var rootList []any
-		for _, r := range roots {
-			rootList = append(rootList, db.AsString(r, "root_token"))
-		}
-		if len(rootList) == 0 {
-			a.page(w, "Tokens", `<p class=meta>You have no issued tokens.</p>`, sess, 0, 0)
-			return
-		}
-		all, err = db.QueryRows(ctx, a.pool,
-			"SELECT * FROM tokens WHERE root_token IN ("+db.Marks(len(rootList))+") ORDER BY created", rootList...)
-	} else {
-		all, err = db.QueryRows(ctx, a.pool, "SELECT * FROM tokens ORDER BY created")
+		where = append(where, "t.root_token IN (SELECT DISTINCT root_token FROM tokens WHERE low = ?)")
+		args = append(args, sanitize.Canon(sess.Subject))
 	}
+	if !showDeleted {
+		where = append(where, "COALESCE(a.deleted, 0) = 0")
+	}
+	switch state {
+	case "live":
+		where = append(where, "t.claimed IS NOT NULL AND t.revoked IS NULL AND (t.exp = 0 OR t.exp > ?)")
+		args = append(args, now)
+	case "unclaimed":
+		where = append(where, "t.claimed IS NULL AND t.revoked IS NULL AND (t.exp = 0 OR t.exp > ?)")
+		args = append(args, now)
+	case "dead":
+		where = append(where, "(t.revoked IS NOT NULL OR (t.exp > 0 AND t.exp < ?))")
+		args = append(args, now)
+	default:
+		state = ""
+	}
+	if q != "" {
+		where = append(where, `(t.name ILIKE ? ESCAPE '\' OR p.name ILIKE ? ESCAPE '\' OR r.name ILIKE ? ESCAPE '\')`)
+		args = append(args, db.LikeArg(q), db.LikeArg(q), db.LikeArg(q))
+	}
+	from := `FROM tokens t
+		 LEFT JOIN tokens p ON p.self_token = t.parent_token AND p.self_token <> t.self_token
+		 LEFT JOIN tokens r ON r.self_token = t.root_token
+		 LEFT JOIN agents a ON a.low = t.low ` + db.Where(where)
+	totalV, _, err := db.QueryOneValue(ctx, a.pool, "SELECT COUNT(*) c "+from, args...)
 	if err != nil {
 		a.page(w, "Error", fmt.Sprintf("<p class=meta>%s</p>", esc(err.Error())), sess, 500, 0)
 		return
 	}
-	bySelf := map[string]map[string]any{}
-	for _, t := range all {
-		bySelf[db.AsString(t, "self_token")] = t
+	total := int(toF(totalV))
+	order := "t.created, t.id"
+	if newest {
+		order = "t.created DESC, t.id DESC"
 	}
-	// group by root, keep root order by first-seen
-	var rootsOrder []string
-	byRoot := map[string][]map[string]any{}
-	for _, t := range all {
-		rt := db.AsString(t, "root_token")
-		if _, seen := byRoot[rt]; !seen {
-			rootsOrder = append(rootsOrder, rt)
-		}
-		byRoot[rt] = append(byRoot[rt], t)
+	rows, err := db.QueryRows(ctx, a.pool,
+		`SELECT t.name, t.descr, t.created, t.exp, t.claimed, t.revoked, p.name AS parent, r.name AS root,
+		        COALESCE(a.deleted, 0) AS agent_deleted `+from+" ORDER BY "+order+" LIMIT ? OFFSET ?", append(args, limit, offset)...)
+	if err != nil {
+		a.page(w, "Error", fmt.Sprintf("<p class=meta>%s</p>", esc(err.Error())), sess, 500, 0)
+		return
 	}
 	var sb strings.Builder
-	sb.WriteString(`<div class=tree>`)
-	for _, rt := range rootsOrder {
-		group := byRoot[rt]
-		sb.WriteString("<ul>")
-		for _, t := range group {
-			sb.WriteString(a.tokenRow(t, bySelf, now))
+	for _, t := range rows {
+		status, label := tokenStatus(t, now)
+		name := db.AsString(t, "name")
+		if name == "" {
+			name = "(unclaimed)"
 		}
-		sb.WriteString("</ul>")
+		exp := "-"
+		if e := db.AsFloat(t, "exp"); e > 0 {
+			exp = stamp(e)
+		}
+		parent := db.AsString(t, "parent")
+		if db.IsNull(t, "parent") {
+			parent = "service (root)"
+		} else if parent == "" {
+			parent = "(unclaimed)"
+		}
+		root := db.AsString(t, "root")
+		if root == "" {
+			root = "(unclaimed)"
+		}
+		sb.WriteString(fmt.Sprintf(`<tr><td class=n>%s</td><td class=n>%s</td><td><span class="badge b-%s">%s</span></td><td><strong>%s</strong></td><td>%s</td><td>%s</td><td class=meta>%s</td></tr>`,
+			stamp(db.AsFloat(t, "created")), exp, status, esc(label), esc(name), esc(parent), esc(root), esc(db.AsString(t, "descr"))))
 	}
-	sb.WriteString(`</div>`)
+	if sb.Len() == 0 {
+		sb.WriteString(`<tr><td colspan=7 class=meta>No tokens match.</td></tr>`)
+	}
 	heading := "Token forest (all issued tokens)"
 	if sess.Kind == "agent" {
 		heading = "Your token tree"
 	}
-	a.page(w, "Tokens", fmt.Sprintf("<h2>%s</h2><p class=meta>%d tokens. Token values are secrets and are never shown here.</p>%s",
-		esc(heading), len(all), sb.String()), sess, 0, 0)
+	shownFrom, shownTo := 0, 0
+	if len(rows) > 0 {
+		shownFrom, shownTo = offset+1, offset+len(rows)
+	}
+	keep := url.Values{"q": {q}, "state": {state}}
+	if showDeleted {
+		keep.Set("deleted", "1")
+	}
+	if newest {
+		keep.Set("newest", "1")
+	}
+	prev, next := url.Values{}, url.Values{}
+	for k, v := range keep {
+		prev[k], next[k] = v, v
+	}
+	prev.Set("offset", strconv.Itoa(maxInt(offset-limit, 0)))
+	next.Set("offset", strconv.Itoa(shownTo))
+	body := fmt.Sprintf(`<h2>%s</h2><p class=meta>%d tokens. Token values are secrets and are never shown here.</p>`+
+		`<form class=search method=get action="/ui/tokens"><input type=text name=q value=%q placeholder="name, parent or root">`+
+		` <select name=state><option value="">any state</option><option value=live%s>live</option><option value=unclaimed%s>unclaimed</option><option value=dead%s>dead</option></select>`+
+		` <label><input type=checkbox name=deleted value=1%s> show deleted</label>`+
+		` <label><input type=checkbox name=newest value=1%s> newest first</label>`+
+		` <button type=submit>Filter</button></form>`+
+		`<table><tr><th>Created</th><th>Expires</th><th>State</th><th>Name</th><th>Parent</th><th>Root</th><th>Description</th></tr>%s</table>`+
+		`<div class=pager>%s<span class=meta>%d-%d of %d</span>%s</div>`,
+		esc(heading), total, q,
+		mapString(state == "live", " selected", ""), mapString(state == "unclaimed", " selected", ""), mapString(state == "dead", " selected", ""),
+		mapString(showDeleted, " checked", ""), mapString(newest, " checked", ""),
+		sb.String(),
+		mapString(offset > 0, fmt.Sprintf(`<a href=%s>&larr; previous</a>`, uiLink("/ui/tokens", prev)), "<span></span>"),
+		shownFrom, shownTo, total,
+		mapString(shownTo < total, fmt.Sprintf(`<a href=%s>next &rarr;</a>`, uiLink("/ui/tokens", next)), "<span></span>"))
+	a.page(w, "Tokens", body, sess, 0, 0)
 }
 
-// tokenStatus classifies a token row for display: live / used(claimed shows as live) / dead / unclaimed.
+// tokenStatus classifies a token row for display: deleted (agent retired) / dead / live / unclaimed.
 func tokenStatus(t map[string]any, now float64) (string, string) {
 	switch {
+	case db.AsFloat(t, "agent_deleted") != 0:
+		return "deleted", "deleted"
 	case !db.IsNull(t, "revoked"):
 		return "dead", "revoked"
 	case db.AsFloat(t, "exp") > 0 && db.AsFloat(t, "exp") < now:
@@ -1015,64 +1078,6 @@ func tokenStatus(t map[string]any, now float64) (string, string) {
 	default:
 		return "unclaimed", "unclaimed invite"
 	}
-}
-
-// tokenDepth counts parent hops to the root (cycle-guarded) for tree indentation.
-func tokenDepth(t map[string]any, bySelf map[string]map[string]any) int {
-	depth := 0
-	seen := map[string]bool{}
-	cur := t
-	for cur != nil {
-		sel := db.AsString(cur, "self_token")
-		if seen[sel] {
-			break
-		}
-		seen[sel] = true
-		if db.AsString(cur, "root_token") == sel {
-			break
-		}
-		parent, ok := bySelf[db.AsString(cur, "parent_token")]
-		if !ok {
-			break
-		}
-		depth++
-		cur = parent
-	}
-	return depth
-}
-
-// tokenRow renders one node of the forest. Token values are secrets and are never shown; only
-// identity (name/descr), status, times and the issuer are, plus structural depth for indentation.
-func (a *App) tokenRow(t map[string]any, bySelf map[string]map[string]any, now float64) string {
-	status, label := tokenStatus(t, now)
-	name := db.AsString(t, "name")
-	shown := name
-	if shown == "" {
-		shown = "(unclaimed)"
-	}
-	isRoot := db.AsString(t, "root_token") == db.AsString(t, "self_token")
-	issuer := "service (root)"
-	if !isRoot {
-		if parent, ok := bySelf[db.AsString(t, "parent_token")]; ok {
-			if pn := db.AsString(parent, "name"); pn != "" {
-				issuer = pn
-			}
-		}
-	}
-	depth := tokenDepth(t, bySelf)
-	pad := strings.Repeat("\u00b7 ", depth)
-	descr := db.AsString(t, "descr")
-	descrHTML := ""
-	if descr != "" {
-		descrHTML = fmt.Sprintf(` <span class=meta>%s</span>`, esc(descr))
-	}
-	exp := "-"
-	if e := db.AsFloat(t, "exp"); e > 0 {
-		exp = stamp(e)
-	}
-	return fmt.Sprintf(`<li>%s<span class="badge b-%s">%s</span> <strong>%s</strong>%s`+
-		` <span class=meta>id %d &middot; by %s &middot; created %s &middot; expires %s</span></li>`,
-		pad, status, esc(label), esc(shown), descrHTML, db.AsInt64(t, "id"), esc(issuer), stamp(db.AsFloat(t, "created")), exp)
 }
 
 // --- /ui/files --------------------------------------------------------------

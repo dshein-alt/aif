@@ -84,7 +84,7 @@ func TestLoginSetsADerivedHttponlyCookie(t *testing.T) {
 	}
 	value := cookieValue(res)
 	kind, subject, exp, sig := splitCookie(value)
-	eqStr(t, kind, "cfg", "kind")
+	eqStr(t, kind, "web", "kind")
 	eq(t, len(subject), 12, "subject length")
 	if strings.Contains(subject, webToken) || strings.Contains(value, webToken) {
 		t.Fatalf("web token leaked into cookie: %q", value)

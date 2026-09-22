@@ -125,6 +125,9 @@ func (a *App) Router() http.Handler {
 	r.Post("/api/threads/{id}/msgs", a.handleThreadPost)
 	r.Post("/api/threads/{id}/messages", a.handleThreadPost)
 
+	r.Get("/api/spaces", a.handleSpaces)
+	r.Post("/api/spaces", a.handleSpacesOp)
+
 	r.Post("/api/messages", a.handleMessageNew)
 	r.Get("/api/messages/{id}", a.handleMessage)
 	r.Delete("/api/messages/{id}", a.handleMessageDelete)
@@ -623,6 +626,26 @@ func (a *App) handleSeen(w http.ResponseWriter, req *http.Request) {
 	a.reply(w, req, payload, err, "")
 }
 
+// --- spaces ---------------------------------------------------------------
+
+// handleSpaces lists the spaces the caller can see (GET /api/spaces).
+func (a *App) handleSpaces(w http.ResponseWriter, req *http.Request) {
+	a.callAndReply(w, req, "spaces", queryArgs(req), nil, "sp")
+}
+
+// handleSpacesOp runs the space admin op (POST /api/spaces). The action is keyed by the field
+// set (not an "op"): {"new":1,"name":"lab"} create · {"id":3,"add":"bob"} invite ·
+// {"id":3,"rm":"bob"} withdraw · {"id":3,"del":1} delete · {"id":3} read one. Use "add"/"rm" for
+// the member name — a body "agent" field is read as the caller's identity, not the target.
+func (a *App) handleSpacesOp(w http.ResponseWriter, req *http.Request) {
+	body, err := a.bodyOf(req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	a.callAndReply(w, req, "space", body, body, "")
+}
+
 // --- threads ----------------------------------------------------------------
 
 func (a *App) handleThreads(w http.ResponseWriter, req *http.Request) {
@@ -875,7 +898,8 @@ func (a *App) handleFileMeta(w http.ResponseWriter, req *http.Request) {
 }
 
 func (a *App) handleFileRaw(w http.ResponseWriter, req *http.Request) {
-	if _, err := a.checkToken(req, nil); err != nil {
+	p, err := a.checkToken(req, nil)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -884,13 +908,35 @@ func (a *App) handleFileRaw(w http.ResponseWriter, req *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	row, err := db.QueryOne(req.Context(), a.pool, "SELECT * FROM files WHERE id = ?", id)
+	row, err := db.QueryOne(req.Context(), a.pool,
+		"SELECT f.*, th.deleted AS tdel, th.space AS sp, th.id AS t FROM files f JOIN messages m ON m.id = f.mid JOIN threads th ON th.id = m.thread WHERE f.id = ?", id)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	if row == nil || db.IsNull(row, "mid") {
 		writeErr(w, core.NewError(404, "no_file", "attached file is unknown or expired", "ids come from message field fl[].i"))
+		return
+	}
+	if toF(row["tdel"]) != 0 {
+		writeErr(w, core.NewError(404, "no_file", "attached file is unknown or expired", "the message it lived on is gone"))
+		return
+	}
+	me := p.me
+	if me != "" {
+		me, err = core.Identity(req.Context(), a.pool, me)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	vis, err := core.NewVis(req.Context(), a.pool, me, p.admin)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if !vis.ThreadVisible(asInt(row["t"]), asInt(row["sp"])) {
+		writeErr(w, core.NewError(404, "no_file", "attached file is unknown or expired", "file ids come from message field fl[].i"))
 		return
 	}
 	data, err := storage.ReadAll(a.cfg, db.AsString(row, "key"))

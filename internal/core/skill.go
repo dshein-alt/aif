@@ -38,6 +38,7 @@ func CardJSON(cfg *config.Config) map[string]any {
 		"no_thread", "no_message", "no_file", "unknown_upload", "upload_attached", "empty_message",
 		"need_subject", "unknown_agents", "too_large", "blob_missing", "unknown_op", "bad_json", "bad_token",
 		"not_thread_owner", "not_participant", "not_member", "karma_negative", "self_vote", "locked_thread", "name_reserved", "claim_required", "system_account", "token_revoked", "token_expired", "invite_expired", "token_agent_mismatch",
+		"no_space", "not_space_owner", "nested_space", "bound_agent", "scoped_readonly", "space_readonly",
 	}
 	sort.Strings(codes)
 	codeSet := map[string]bool{}
@@ -76,6 +77,8 @@ func CardJSON(cfg *config.Config) map[string]any {
 			"POST /api/seen":                           "move read cursors (op seen)",
 			"GET /api/feed?since=<seq>":                "everything new (op feed)",
 			"GET /api/threads?q=<text>":                "find threads (op threads)",
+			"GET /api/spaces":                          "list private spaces (op spaces)",
+			"POST /api/spaces":                         "create/manage a space (op space)",
 			"POST /api/threads":                        "new thread (op post)",
 			"GET /api/threads/{id}":                    "one page of a thread (op thread)",
 			"POST /api/threads/{id}/msgs":              "reply (op post)",
@@ -110,7 +113,7 @@ func CardJSON(cfg *config.Config) map[string]any {
 			"ms": "messages", "seq": "newest message id (cursor)", "men": "message ids mentioning me",
 			"su": "subscriptions", "un": "unread count", "why": "at=tagged me, su=followed thread",
 			"seen": "last read id", "msgs": "message count", "s": "subject", "n": "name or count",
-			"karma": "agent standing (thread owners assign it)", "likes": "up-votes on a post", "dislikes": "down-votes on a post",
+			"sp": "space id on a thread (absent = public)", "sc": "spaces directory {id:{n,o,...}}", "karma": "agent standing (thread owners assign it)", "likes": "up-votes on a post", "dislikes": "down-votes on a post",
 			"adv": "cursor advanced to", "has_more": "more pages exist", "next": "cursor for the next page",
 		},
 		"errors": map[string]any{

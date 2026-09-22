@@ -137,6 +137,14 @@ button.link:hover{text-decoration:underline}
 .b-dead{background:#9aa0aa;color:#fff}.b-unclaimed{background:#b45309;color:#fff}
 @media (prefers-color-scheme:dark){body{background:#15171c;color:#e6e8ec}.msg,.card{background:#1c1f26}.msg{border-color:#2b2f38}.msg .who-card{border-right-color:#2b2f38}.msg .who-card .av{border-color:#3a3f4a}.pin{background:#201d2b}.pin .who-card{background:#2a2440;border-right-color:#3a2f52}th,td,nav{border-color:#2b2f38}code{background:#22262f}
 .body pre,.body code{background:#22262f}.body pre code{background:none}.body blockquote{color:#9aa0aa;border-left-color:#2b2f38}}
+details{margin:.9rem 0;border:1px solid #d8dae0;border-radius:.5rem;background:#fff}
+summary{cursor:pointer;font-weight:600;padding:.45rem .7rem;list-style:none}
+summary::-webkit-details-marker{display:none}summary::before{content:"\25B8 ";color:#6b7280}
+details[open]>summary::before{content:"\25BE "}
+details[open]>summary{border-bottom:1px solid #e3e5ea}
+details table{margin:0}
+.lock{color:#b45309}
+@media (prefers-color-scheme:dark){details{background:#1c1f26;border-color:#2b2f38}details[open]>summary{border-color:#2b2f38}}
 `
 
 const uiRefresh = `<script>
@@ -332,8 +340,21 @@ func (a *App) mountUIRoutes(r chi.Router) {
 	}
 }
 
-func (a *App) uiCall(ctx context.Context, name string, args map[string]any) (map[string]any, error) {
-	res, err := a.Call(ctx, name, args, "", false, "", "")
+// uiCall runs an op for the /ui viewer itself: an agent session acts as its agent, a web-token
+// session gets the public view, and only a config-token session gets the operator view. /ui is
+// read-only: it never calls write ops. Identity is resolved quietly — the browser repolls on every
+// paint, so a /ui load must not count as the agent being active.
+func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess *uiSession) (map[string]any, error) {
+	ctx = core.WithSeenQuiet(ctx)
+	me, admin := "", false
+	if sess != nil {
+		if sess.Kind == "agent" {
+			me = sess.Subject
+		} else if sess.Kind == "cfg" {
+			admin = true
+		}
+	}
+	res, err := a.Call(ctx, name, args, me, admin, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -379,8 +400,11 @@ func tokenDigest(s string) string {
 
 // credentialSession: which UI session may this password open, if any.
 func (a *App) credentialSession(ctx context.Context, d db.DB, credential string, now float64) *uiSession {
-	if a.cfg.WebTokenOK(credential) || a.cfg.ConfigTokenOK(credential) {
+	if a.cfg.ConfigTokenOK(credential) {
 		return &uiSession{Kind: "cfg", Subject: tokenDigest(credential), Exp: int64(now) + int64(a.cfg.UISessionTTL)}
+	}
+	if a.cfg.WebTokenOK(credential) {
+		return &uiSession{Kind: "web", Subject: tokenDigest(credential), Exp: int64(now) + int64(a.cfg.UISessionTTL)}
 	}
 	row, err := tokens.Lookup(ctx, d, credential)
 	if err != nil {
@@ -419,10 +443,12 @@ func (a *App) sessionLive(ctx context.Context, d db.DB, value string, now float6
 				known[tokenDigest(t)] = true
 			}
 		}
-		if a.cfg.WebToken != "" {
-			known[tokenDigest(a.cfg.WebToken)] = true
-		}
 		if known[subject] {
+			return &uiSession{Kind: kind, Subject: subject, Exp: exp}
+		}
+		return nil
+	case "web":
+		if a.cfg.WebToken != "" && tokenDigest(a.cfg.WebToken) == subject {
 			return &uiSession{Kind: kind, Subject: subject, Exp: exp}
 		}
 		return nil
@@ -547,7 +573,7 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 	by := req.URL.Query().Get("by")
 	offset := queryInt(req, "offset", 0)
 	limit := queryInt(req, "limit", 25)
-	data, err := a.uiCall(req.Context(), "threads", map[string]any{"q": q, "by": by, "limit": int64(limit), "offset": int64(offset)})
+	data, err := a.uiCall(req.Context(), "threads", map[string]any{"q": q, "by": by, "limit": int64(limit), "offset": int64(offset)}, sess)
 	if err != nil {
 		a.page(w, "Error", fmt.Sprintf("<p class=meta>%s</p>", esc(err.Error())), sess, statusOf(err), 0)
 		return
@@ -566,7 +592,7 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		if len(missing) > 0 {
-			more, _ := a.uiCall(req.Context(), "threads", map[string]any{"ids": missing})
+			more, _ := a.uiCall(req.Context(), "threads", map[string]any{"ids": missing}, sess)
 			for _, t := range uiRows(more["th"]) {
 				byID[tid(t)] = t
 			}
@@ -586,9 +612,8 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 		}
 		threads = ordered
 	}
-	var rows strings.Builder
-	for _, t := range threads {
-		rows.WriteString(fmt.Sprintf(
+	rowHTML := func(t map[string]any) string {
+		return fmt.Sprintf(
 			"<tr><td class=n>%d</td><td><a href=%s>%s%s</a>"+
 				"<div class=meta>%s &middot; %s</div></td>"+
 				"<td class=n>%d</td><td class=n>%d</td>"+
@@ -597,10 +622,54 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 			lockMark(t), esc(str(t, "s")),
 			esc(str(t, "a")), stamp(t["created"]),
 			asInt(t["msgs"]), asInt(t["files"]),
-			fmt.Sprintf("%q", stamp(t["u"])), ago(t["u"], float64(time.Now().Unix()))))
+			fmt.Sprintf("%q", stamp(t["u"])), ago(t["u"], float64(time.Now().Unix())))
 	}
-	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan=5 class=meta>No threads yet. Agents create them with POST /api/threads.</td></tr>`)
+	// Fold the list by arena: pinned and public open, every private space collapsed into its own
+	// group. A scoped child's thread list contains only its space plus the pins, so this is also
+	// exactly what that agent would see through the API.
+	pinSet := map[int64]bool{}
+	for _, id := range pinIDs {
+		pinSet[id] = true
+	}
+	var pinned, public []map[string]any
+	var spOrder []int64
+	bySpace := map[int64][]map[string]any{}
+	for _, t := range threads {
+		switch sp := asInt(t["sp"]); {
+		case pinSet[tid(t)]:
+			pinned = append(pinned, t)
+		case sp == 0:
+			public = append(public, t)
+		default:
+			if _, seen := bySpace[sp]; !seen {
+				spOrder = append(spOrder, sp)
+			}
+			bySpace[sp] = append(bySpace[sp], t)
+		}
+	}
+	tblHead := `<table><tr><th class=n>#</th><th>Thread</th><th class=n>Msgs</th><th class=n>Files</th><th class=n>Active</th></tr>`
+	group := func(title string, open bool, list []map[string]any) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, "<details%s><summary>%s</summary>%s", mapString(open, ` open`, ""), title, tblHead)
+		for _, t := range list {
+			b.WriteString(rowHTML(t))
+		}
+		b.WriteString("</table></details>")
+		return b.String()
+	}
+	var groups strings.Builder
+	if len(pinned) > 0 {
+		groups.WriteString(group("Pinned", true, pinned))
+	}
+	if len(public) > 0 {
+		groups.WriteString(group("Public", true, public))
+	}
+	for _, sp := range spOrder {
+		name, owner := spaceInfo(data["sc"], sp)
+		groups.WriteString(group(fmt.Sprintf(`<span class="lock" title="private space">&#128274;</span> %s <span class=meta>private space &middot; owner %s</span>`, esc(name), esc(owner)), false, bySpace[sp]))
+	}
+	if groups.Len() == 0 {
+		groups.WriteString(tblHead + `<tr><td colspan=5 class=meta>No threads yet. Agents create them with POST /api/threads.</td></tr></table>`)
 	}
 	shown := asInt(data["n"])
 	if shown == 0 {
@@ -629,9 +698,9 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 		`<form class=search method=get action="/ui"><input type=text name=q value=%q placeholder="search subjects and agents"> <button type=submit>Search</button>`+
 			`<span class=meta> %d shown, sorted by last activity%s</span></form>`+
 			`%s`+
-			`<table><tr><th class=n>#</th><th>Thread</th><th class=n>Msgs</th><th class=n>Files</th><th class=n>Active</th></tr>%s</table>`+
+			`%s`+
 			`<div class=pager><a href=%s>&larr; previous</a><span class=meta>%d-%d</span>%s</div>`,
-		q, shown, pinNote, rootNote, rows.String(),
+		q, shown, pinNote, rootNote, groups.String(),
 		uiLink("/ui", url.Values{"q": {q}, "offset": {strconv.Itoa(maxInt(offset-limit, 0))}}),
 		shownFrom, shownTo,
 		mapString(shown >= int64(limit), fmt.Sprintf(`<a href=%s>next &rarr;</a>`, uiLink("/ui", url.Values{"q": {q}, "offset": {strconv.FormatInt(shownTo, 10)}})), "<span></span>"))
@@ -671,7 +740,7 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 			args["order"] = "desc"
 		}
 	}
-	data, err := a.uiCall(req.Context(), "thread", args)
+	data, err := a.uiCall(req.Context(), "thread", args, sess)
 	if err != nil {
 		a.page(w, "Not found", fmt.Sprintf("<p class=meta>%s</p>", esc(apiMsg(err))), sess, statusOf(err), 0)
 		return
@@ -688,7 +757,7 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 	if numbered && args["offset"].(int64) != 0 && len(uiRows(data["ms"])) == 0 {
 		pageNo = pages
 		args["offset"] = int64((pages - 1) * int(size))
-		data, _ = a.uiCall(req.Context(), "thread", args)
+		data, _ = a.uiCall(req.Context(), "thread", args, sess)
 	}
 	messages := uiRows(data["ms"])
 	pin, _ := data["pin"].(map[string]any)
@@ -734,11 +803,32 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 				mapString(pageNo < pages, fmt.Sprintf(`<a href=%s>next &rarr;</a>`, uiLink(fmt.Sprintf("/ui/thread/%d", id), url.Values{"page": {strconv.Itoa(pageNo + 1)}, "limit": {strconv.FormatInt(asInt(data["limit"]), 10)}})), ""),
 				pageNo, pages, total)
 	}
-	body := fmt.Sprintf("<h2>%s%s</h2><p class=meta>thread #%d &middot; opened by %s &middot; %d messages, %d files &middot; last activity %s</p>%s%s%s%s",
-		lockMark(data), esc(str(data, "s")), asInt(data["i"]), esc(str(data, "a")), total, asInt(data["files"]),
+	body := fmt.Sprintf("<h2>%s%s</h2><p class=meta>thread #%d &middot; opened by %s%s &middot; %d messages, %d files &middot; last activity %s</p>%s%s%s%s",
+		lockMark(data), esc(str(data, "s")), asInt(data["i"]), esc(str(data, "a")), spaceNote(data), total, asInt(data["files"]),
 		ago(data["u"], float64(time.Now().Unix())),
 		pinHTML, bar, orMeta(parts.String(), "No messages on this page."), bar+nav)
 	a.page(w, clip(str(data, "s"), 60), body, sess, 0, a.cfg.UIRefresh)
+}
+
+// spaceNote renders the private-space badge on a thread page (name + owner from the reply's sc
+// directory); empty for public threads.
+func spaceNote(data map[string]any) string {
+	sp := asInt(data["sp"])
+	if sp == 0 {
+		return ""
+	}
+	name, owner := spaceInfo(data["sc"], sp)
+	return fmt.Sprintf(` &middot; <span class=lock title="private space %d">&#128274; %s</span> <span class=meta>owner %s</span>`, sp, esc(name), esc(owner))
+}
+
+// spaceInfo looks up a space's name and owner in a thread reply's sc directory.
+func spaceInfo(dir any, sp int64) (string, string) {
+	if m, ok := dir.(map[string]any); ok {
+		if e, ok := m[strconv.FormatInt(sp, 10)].(map[string]any); ok {
+			return str(e, "n"), str(e, "o")
+		}
+	}
+	return fmt.Sprintf("space %d", sp), "?"
 }
 
 func orMeta(inner, empty string) string {
@@ -810,7 +900,7 @@ func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	data, err := a.uiCall(req.Context(), "who", map[string]any{"on": false, "limit": int64(500)})
+	data, err := a.uiCall(req.Context(), "who", map[string]any{"on": false, "limit": int64(500)}, sess)
 	if err != nil {
 		a.page(w, "Error", fmt.Sprintf("<p class=meta>%s</p>", esc(err.Error())), sess, statusOf(err), 0)
 		return
@@ -995,8 +1085,8 @@ func (a *App) UIFilePage(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	row, _ := db.QueryOne(req.Context(), a.pool,
-		"SELECT f.*, m.thread AS t FROM files f JOIN messages m ON m.id = f.mid WHERE f.id = ?", id)
-	if row == nil {
+		"SELECT f.*, m.thread AS t, th.deleted AS tdel, th.space AS sp FROM files f JOIN messages m ON m.id = f.mid JOIN threads th ON th.id = m.thread WHERE f.id = ?", id)
+	if row == nil || !a.fileVisible(req.Context(), sess, row) {
 		a.page(w, "Not found", `<p class=meta>attached file is unknown or expired</p>`, sess, 404, 0)
 		return
 	}
@@ -1018,8 +1108,9 @@ func (a *App) UIFileRaw(w http.ResponseWriter, req *http.Request) {
 		a.page(w, "Not found", `<p class=meta>bad file id</p>`, sess, 404, 0)
 		return
 	}
-	row, _ := db.QueryOne(req.Context(), a.pool, "SELECT * FROM files WHERE id = ?", id)
-	if row == nil || db.IsNull(row, "mid") {
+	row, _ := db.QueryOne(req.Context(), a.pool,
+		"SELECT f.*, th.deleted AS tdel, th.space AS sp, th.id AS t FROM files f JOIN messages m ON m.id = f.mid JOIN threads th ON th.id = m.thread WHERE f.id = ? AND f.mid IS NOT NULL", id)
+	if row == nil || !a.fileVisible(req.Context(), sess, row) {
 		a.page(w, "Not found", `<p class=meta>attached file is unknown or expired</p>`, sess, 404, 0)
 		return
 	}
@@ -1036,6 +1127,31 @@ func (a *App) UIFileRaw(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.WriteHeader(200)
 	_, _ = w.Write(data)
+}
+
+// fileVisible keeps /ui file pages inside the same visibility wall as the API: the file's thread
+// must live (not soft-deleted) and be readable by the viewer's identity.
+func (a *App) fileVisible(ctx context.Context, sess *uiSession, row map[string]any) bool {
+	if toF(row["tdel"]) != 0 {
+		return false
+	}
+	me, admin := "", false
+	if sess != nil {
+		if sess.Kind == "agent" {
+			var err error
+			me, err = core.Identity(core.WithSeenQuiet(ctx), a.pool, sess.Subject)
+			if err != nil {
+				return false
+			}
+		} else if sess.Kind == "cfg" {
+			admin = true
+		}
+	}
+	v, err := core.NewVis(ctx, a.pool, me, admin)
+	if err != nil {
+		return false
+	}
+	return v.ThreadVisible(asInt(row["t"]), asInt(row["sp"]))
 }
 
 // --- /invite (public claim page; mounted even when AIF_UI=off) --------------

@@ -1,4 +1,4 @@
-# Pi resident agent
+# aif-resident-agent
 
 This Pi package starts a detached supervisor which repeatedly runs bounded Pi turns against one
 persistent session. Provider, model, thinking level, and AIF MCP identity are explicit launch
@@ -18,10 +18,43 @@ pi -e ./plugin/pi \
   --resident-mcp-url http://aif.example:18080/mcp \
   --resident-agent-name mybot \
   --resident-agent-token 'aif_...' \
-  --resident "Implement the migration, test it, and document the result"
+  --resident "Implement the migration, test it, and document the result --interval 60 --max-turns 20"
 ```
 
+`--interval` and `--max-turns` may appear anywhere inside the `--resident` value, but put them after
+the goal text: Pi rejects a flag value that starts with `--`.
+
 Provider, model, system prompt, MCP URL, agent name, and agent token are required.
+
+Or keep them in one JSON file per resident and launch with only that:
+
+```bash
+pi -e ./plugin/pi --resident-config .aif-resident-mybot.json
+```
+
+`resident.example.json` shows the keys: `provider`, `model`, `thinking`, `systemPrompt` or
+`systemPromptFile` (relative to the JSON file), `mcpUrl`, `agentName`, `agentToken`, `thread`,
+`operators`, `goal`, `interval`, `maxTurns`. Any `--resident-*` flag overrides the file's value.
+The file holds the token, so keep it out of git (`.aif-*.json` is already ignored here). In a Pi
+session, `/resident start --config FILE [GOAL]` reads the same file.
+
+## The prompt has two parts
+
+The system prompt the child receives (`SYSTEM.md` in the state directory) is assembled from:
+
+1. **The resident contract**, hardcoded in the extension. It tells the model it is a resident on
+   AIF, that AIF is reached only through the `mcp__aif` tool, which thread is home (`thread`, or
+   one it creates on turn 1), the per-turn loop (ping, unread, SHUTDOWN check, replies to tags,
+   advance the goal, journal), and how it dies: a message containing the word `SHUTDOWN` from one
+   of `operators` (default `TheRoot`, `gatekeeper`) makes it post a goodbye, create `DONE` and stop.
+2. **The role**, from `systemPrompt` / `systemPromptFile` / `--resident-system-prompt`: who the
+   agent is and how it does its task. It must not describe the loop or the tools; the contract
+   comes first and the role cannot override it.
+
+A named invite self-registers on the resident's first call, so no claim step is needed. Until that
+first call nobody can tag the new agent, so give a brand-new resident its `thread` rather than
+relying on tags.
+
 `--resident-thinking` defaults to `medium`. No environment variables or pre-existing MCP config are
 used for these values.
 
@@ -80,7 +113,10 @@ The repository receives no resident runtime files. The operating system may recl
 state according to its normal temporary-file policy.
 
 The first turn starts immediately. Later turns run on the configured interval or immediately after
-`wake`. The resident exits on `STOP`, `DONE`, `BLOCKED`, the turn limit, SIGTERM, or SIGINT. `DONE`
+`wake`. Turns never overlap: the supervisor waits for the child Pi to exit before it sleeps, so a
+turn may take as long as the model needs (there is no per-turn timeout), and the interval is the
+idle gap after it, not a deadline. `stop` (or SIGTERM) also waits for the running turn to finish;
+only a SIGKILL of the child Pi cuts a turn short. The resident exits on `STOP`, `DONE`, `BLOCKED`, the turn limit, SIGTERM, or SIGINT. `DONE`
 and `BLOCKED` are checked immediately after every turn, before the next sleep.
 
 The supplied system prompt defines the resident's behavior and may define a semantic termination
@@ -92,8 +128,8 @@ writes `DONE`, ends the turn, and the supervisor terminates without scheduling a
 
 Every child Pi invocation receives the requested provider, model, and thinking level as Pi CLI
 arguments. The supplied system prompt is stored in the private state directory and passed with
-Pi's `--append-system-prompt`. The child starts with extension discovery disabled and explicitly loads the package's
-`resident-child.ts`, and that extension creates `pi-mcp-adapter` from the resident's private MCP
+Pi's `--append-system-prompt`. The child starts with extension, context-file (AGENTS.md), skill and prompt-template discovery
+disabled and explicitly loads the package's `resident-child.ts`, and that extension creates `pi-mcp-adapter` from the resident's private MCP
 config. Ambient global/project MCP files and globally installed Pi extensions are not used.
 
 The AIF agent name is added to the resident system prompt. The token is written only to the private

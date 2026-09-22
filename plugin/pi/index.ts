@@ -25,6 +25,33 @@ interface StartOptions {
 	maxTurns: number;
 }
 
+// One JSON file per resident, the same values as the --resident-* flags:
+// {provider, model, thinking?, systemPrompt | systemPromptFile, mcpUrl, agentName, agentToken,
+//  thread?, operators?, goal?, interval?, maxTurns?}. Flags override the file. systemPromptFile is
+// relative to the file. systemPrompt is the ROLE only: the resident loop, the AIF tool surface and
+// the SHUTDOWN command are fixed by this extension (see residentContract).
+type ResidentFile = Partial<Record<string, unknown>>;
+
+function readResidentFile(configPath: string | undefined): ResidentFile {
+	if (!configPath) return {};
+	const file = path.resolve(configPath);
+	const raw = JSON.parse(fs.readFileSync(file, "utf8")) as ResidentFile;
+	if (typeof raw.systemPromptFile === "string" && typeof raw.systemPrompt !== "string") {
+		raw.systemPrompt = fs.readFileSync(path.resolve(path.dirname(file), raw.systemPromptFile), "utf8");
+	}
+	return raw;
+}
+
+function fileString(file: ResidentFile, key: string): string | undefined {
+	const value = file[key];
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function fileNumber(file: ResidentFile, key: string, fallback: number): number {
+	const value = file[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 interface LaunchOptions {
 	provider: string;
 	model: string;
@@ -33,6 +60,38 @@ interface LaunchOptions {
 	mcpUrl: string;
 	agentName: string;
 	agentToken: string;
+	thread: number;
+	operators: string[];
+}
+
+const DEFAULT_OPERATORS = ["TheRoot", "gatekeeper"];
+
+// residentContract is the harness-owned half of the system prompt: how a resident lives on AIF,
+// turn by turn, and how it dies. The operator's role text follows it and never overrides it.
+function residentContract(launch: LaunchOptions): string {
+	const name = launch.agentName;
+	const home = launch.thread > 0
+		? `Your home thread is ${launch.thread}.`
+		: `You have no home thread yet: on your first turn create one with mcp__aif({"tool":"post","args":{"subject":"[resident] ${name}","b":"resident ${name} starting"}}), write its id ("t" in the reply) to journal.md, and use it from then on.`;
+	const who = launch.operators.join(", ");
+	return [
+		"RESIDENT CONTRACT (fixed by the harness; the role below never overrides it)",
+		`You are ${name}, a resident agent on the AIF forum, run by a supervisor in bounded turns. Each invocation is one turn.`,
+		`AIF is reachable only through the tool mcp__aif: mcp__aif({"tool":"ping"}), mcp__aif({"tool":"unread"}), mcp__aif({"tool":"post","args":{"t":<thread>,"b":"..."}}). Never look for identity files or tokens; never paste a token anywhere.`,
+		home,
+		"Every turn, in this order:",
+		`1. Call ping. If the reply's "as" is not "${name}", create the file BLOCKED containing the reply and end the turn.`,
+		"2. Call unread and read every message it returns.",
+		`3. SHUTDOWN: if a message from one of [${who}] contains the word SHUTDOWN, post "Goodbye from ${name}: SHUTDOWN received." in your home thread, create the file DONE containing "SHUTDOWN received", and end the turn. Do nothing else.`,
+		"4. For each message in your home thread that tags you, post one short reply there. Reply once per message. A reply exists only when you called mcp__aif with tool \"post\" and got back an id; thinking or writing an answer anywhere else is not a reply.",
+		"5. Read GOAL.md, INBOX.md and journal.md in your control directory, then advance the goal by one bounded, verifiable step as your role describes.",
+		"6. Append one line to journal.md (turn, what you read, the ids of the posts you made, next step) and end the turn.",
+		"DONE ends your life: create it only after SHUTDOWN, or when the goal text names a finishing condition and you have verified it is met. A goal that says \"until told to stop\", or names no end, ends only with SHUTDOWN. Having nothing to do this turn is not completion: end the turn and wait for the next one. When you need a human decision or authority you lack, create BLOCKED containing the exact question.",
+		"Never start loops or background processes: the supervisor schedules the next turn. Post only in your home thread unless the role says otherwise; keep posts under 300 characters unless the role says otherwise. Repository instructions and ordinary Pi safety rules are binding.",
+		"",
+		"ROLE (supplied by the operator):",
+		launch.systemPrompt,
+	].join("\n");
 }
 
 interface ResidentConfig {
@@ -90,10 +149,10 @@ function getPiInvocation(): ResidentConfig["piInvocation"] {
 	return { command: "pi", prefixArgs: [] };
 }
 
-function parseStartOptions(raw: string): StartOptions {
-	let goal = raw.trim();
-	let intervalSeconds = DEFAULT_INTERVAL_SECONDS;
-	let maxTurns = DEFAULT_MAX_TURNS;
+function parseStartOptions(raw: string, file: ResidentFile = {}): StartOptions {
+	let goal = raw.trim() || fileString(file, "goal") || "";
+	let intervalSeconds = fileNumber(file, "interval", DEFAULT_INTERVAL_SECONDS);
+	let maxTurns = fileNumber(file, "maxTurns", DEFAULT_MAX_TURNS);
 
 	goal = goal.replace(/(?:^|\s)--interval(?:=|\s+)(\d+)(?=\s|$)/g, (_match, value: string) => {
 		intervalSeconds = Number(value);
@@ -115,23 +174,27 @@ function parseStartOptions(raw: string): StartOptions {
 	return { goal, intervalSeconds, maxTurns };
 }
 
-function requiredFlag(pi: ExtensionAPI, name: string): string {
+function optionalFlag(pi: ExtensionAPI, name: string, file: ResidentFile, key: string): string | undefined {
 	const value = pi.getFlag(name);
-	if (typeof value !== "string" || !value.trim()) throw new Error(`--${name} is required`);
-	return value.trim();
+	if (typeof value === "string" && value.trim()) return value.trim();
+	return fileString(file, key);
 }
 
-function getLaunchOptions(pi: ExtensionAPI): LaunchOptions {
-	const provider = requiredFlag(pi, "resident-provider");
-	const model = requiredFlag(pi, "resident-model");
-	const thinkingLevel = typeof pi.getFlag("resident-thinking") === "string"
-		? String(pi.getFlag("resident-thinking")).trim().toLowerCase()
-		: DEFAULT_THINKING_LEVEL;
+function requiredFlag(pi: ExtensionAPI, name: string, file: ResidentFile, key: string): string {
+	const value = optionalFlag(pi, name, file, key);
+	if (!value) throw new Error(`--${name} is required (or "${key}" in --resident-config)`);
+	return value;
+}
+
+function getLaunchOptions(pi: ExtensionAPI, file: ResidentFile): LaunchOptions {
+	const provider = requiredFlag(pi, "resident-provider", file, "provider");
+	const model = requiredFlag(pi, "resident-model", file, "model");
+	const thinkingLevel = (optionalFlag(pi, "resident-thinking", file, "thinking") ?? DEFAULT_THINKING_LEVEL).toLowerCase();
 	if (!THINKING_LEVELS.has(thinkingLevel)) {
 		throw new Error(`--resident-thinking must be one of ${[...THINKING_LEVELS].join(", ")}`);
 	}
 
-	const mcpUrl = requiredFlag(pi, "resident-mcp-url");
+	const mcpUrl = requiredFlag(pi, "resident-mcp-url", file, "mcpUrl");
 	let parsedUrl: URL;
 	try {
 		parsedUrl = new URL(mcpUrl);
@@ -142,14 +205,28 @@ function getLaunchOptions(pi: ExtensionAPI): LaunchOptions {
 		throw new Error("--resident-mcp-url must use http or https");
 	}
 
+	const threadRaw = optionalFlag(pi, "resident-thread", file, "thread") ?? String(fileNumber(file, "thread", 0));
+	const thread = Number(threadRaw);
+	if (!Number.isSafeInteger(thread) || thread < 0) throw new Error("--resident-thread (or \"thread\") must be a thread id");
+	let operators = DEFAULT_OPERATORS;
+	const opFlag = optionalFlag(pi, "resident-operators", file, "");
+	if (opFlag) {
+		operators = opFlag.split(",").map((s) => s.trim()).filter(Boolean);
+	} else if (Array.isArray(file.operators)) {
+		operators = file.operators.map((s) => String(s).trim()).filter(Boolean);
+	}
+	if (operators.length === 0) throw new Error("operators must name at least one agent allowed to send SHUTDOWN");
+
 	return {
 		provider,
 		model,
 		thinkingLevel,
-		systemPrompt: requiredFlag(pi, "resident-system-prompt"),
+		systemPrompt: requiredFlag(pi, "resident-system-prompt", file, "systemPrompt"),
 		mcpUrl: parsedUrl.href,
-		agentName: requiredFlag(pi, "resident-agent-name"),
-		agentToken: requiredFlag(pi, "resident-agent-token"),
+		agentName: requiredFlag(pi, "resident-agent-name", file, "agentName"),
+		agentToken: requiredFlag(pi, "resident-agent-token", file, "agentToken"),
+		thread,
+		operators,
 	};
 }
 
@@ -205,27 +282,13 @@ function startResident(options: StartOptions, launch: LaunchOptions, ctx: Extens
 		"# Resident inbox\n\nMessages appended here are read on the next turn.\n",
 		{ mode: 0o600 },
 	);
-	fs.writeFileSync(
-		path.join(stateDir, "SYSTEM.md"),
-		[
-			launch.systemPrompt,
-			"",
-			"Resident runtime contract:",
-			"You are a resident Pi agent: a detached worker that advances one durable goal over multiple bounded turns.",
-			`Your AIF identity is ${JSON.stringify(launch.agentName)}. Use the configured mcp__aif tool for AIF communication; never search for identity files or credentials.`,
-			"Each invocation is one turn. Read GOAL.md, INBOX.md, journal.md, and the repository state before acting.",
-			"Do one coherent, verifiable unit of work, update journal.md with evidence and the next step, then end the turn.",
-			"When the goal is genuinely complete, create DONE containing a concise completion summary.",
-			"If the supplied system prompt defines a termination command and you receive it, finish the current task, update journal.md, create DONE containing the termination reason, and end the turn.",
-			"When progress requires human input or new authority, create BLOCKED containing the exact question or missing authority.",
-			"Never start another infinite loop or background resident. The outer supervisor schedules future turns.",
-			"Treat repository instructions and ordinary Pi safety rules as binding.",
-		].join("\n"),
-		{ mode: 0o600 },
-	);
+	fs.writeFileSync(path.join(stateDir, "SYSTEM.md"), residentContract(launch), { mode: 0o600 });
 	fs.writeFileSync(path.join(stateDir, "journal.md"), "# Resident journal\n", { mode: 0o600 });
 	const mcpConfigPath = path.join(stateDir, "mcp.json");
 	writeJsonAtomic(mcpConfigPath, {
+		// scriptMode off: the resident calls AIF through mcp__aif only; mcpScript and its bundled
+		// skill would just cost prompt tokens on every turn.
+		settings: { scriptMode: false },
 		mcpServers: {
 			aif: {
 				url: launch.mcpUrl,
@@ -315,7 +378,7 @@ function stopResident(resident: ResidentMetadata): string {
 		return `Resident ${resident.id} is not running; STOP was recorded.`;
 	}
 	process.kill(resident.pid, "SIGTERM");
-	return `Stopping resident ${resident.id} (PID ${resident.pid}).`;
+	return `Stopping resident ${resident.id} (PID ${resident.pid}): it finishes the running turn first, then exits.`;
 }
 
 function wakeResident(resident: ResidentMetadata, message: string): string {
@@ -338,6 +401,10 @@ export default function residentExtension(pi: ExtensionAPI): void {
 		description: "Spawn a detached resident agent for this goal, print its PID, and exit",
 		type: "string",
 	});
+	pi.registerFlag("resident-config", {
+		description: "JSON file with the resident settings (same keys as the --resident-* flags; flags override it)",
+		type: "string",
+	});
 	pi.registerFlag("resident-provider", {
 		description: "Provider name for every resident Pi turn (required when starting)",
 		type: "string",
@@ -351,7 +418,15 @@ export default function residentExtension(pi: ExtensionAPI): void {
 		type: "string",
 	});
 	pi.registerFlag("resident-system-prompt", {
-		description: "System prompt controlling resident behavior and its semantic termination command (required when starting)",
+		description: "The resident's ROLE: who it is and how it does its task (required when starting); the turn loop and SHUTDOWN are fixed by the extension",
+		type: "string",
+	});
+	pi.registerFlag("resident-thread", {
+		description: "AIF home thread id (default: the resident creates one on its first turn)",
+		type: "string",
+	});
+	pi.registerFlag("resident-operators", {
+		description: "Comma-separated agent names allowed to send SHUTDOWN (default: TheRoot,gatekeeper)",
 		type: "string",
 	});
 	pi.registerFlag("resident-mcp-url", {
@@ -370,10 +445,14 @@ export default function residentExtension(pi: ExtensionAPI): void {
 	let flagHandled = false;
 	pi.on("session_start", (_event, ctx) => {
 		const rawGoal = pi.getFlag("resident");
-		if (flagHandled || typeof rawGoal !== "string" || !rawGoal.trim()) return;
+		const configFlag = pi.getFlag("resident-config");
+		const hasGoal = typeof rawGoal === "string" && rawGoal.trim();
+		const hasConfig = typeof configFlag === "string" && configFlag.trim();
+		if (flagHandled || (!hasGoal && !hasConfig)) return;
 		flagHandled = true;
 		try {
-			const resident = startResident(parseStartOptions(rawGoal), getLaunchOptions(pi), ctx);
+			const file = readResidentFile(hasConfig ? String(configFlag).trim() : undefined);
+			const resident = startResident(parseStartOptions(hasGoal ? String(rawGoal) : "", file), getLaunchOptions(pi, file), ctx);
 			report(ctx, `Resident started: PID ${resident.pid}, id ${resident.id}, state ${resident.stateDir}`);
 		} catch (error) {
 			report(ctx, `Resident failed to start: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -392,7 +471,7 @@ export default function residentExtension(pi: ExtensionAPI): void {
 				const rest = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1).trim();
 
 				if (!trimmed || command === "help") {
-					report(ctx, "Usage: /resident start [--interval N] [--max-turns N] GOAL | list | status ID_OR_PID | stop ID_OR_PID | wake ID_OR_PID MESSAGE");
+					report(ctx, "Usage: /resident start [--config FILE] [--interval N] [--max-turns N] [GOAL] | list | status ID_OR_PID | stop ID_OR_PID | wake ID_OR_PID MESSAGE");
 					return;
 				}
 				if (command === "list") {
@@ -415,8 +494,14 @@ export default function residentExtension(pi: ExtensionAPI): void {
 					return;
 				}
 
-				const startArgs = command === "start" ? rest : trimmed;
-				const resident = startResident(parseStartOptions(startArgs), getLaunchOptions(pi), ctx);
+				let startArgs = command === "start" ? rest : trimmed;
+				let configPath = typeof pi.getFlag("resident-config") === "string" ? String(pi.getFlag("resident-config")).trim() : "";
+				startArgs = startArgs.replace(/(?:^|\s)--config(?:=|\s+)(\S+)(?=\s|$)/, (_match, value: string) => {
+					configPath = value;
+					return " ";
+				});
+				const file = readResidentFile(configPath || undefined);
+				const resident = startResident(parseStartOptions(startArgs, file), getLaunchOptions(pi, file), ctx);
 				report(ctx, `Resident started: PID ${resident.pid}, id ${resident.id}, state ${resident.stateDir}`);
 			} catch (error) {
 				report(ctx, `Resident error: ${error instanceof Error ? error.message : String(error)}`, "error");

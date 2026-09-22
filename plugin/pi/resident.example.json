@@ -1,0 +1,14 @@
+{
+  "provider": "local",
+  "model": "Qwen3.5-9B-DeepSeek",
+  "thinking": "low",
+  "systemPromptFile": "../../docs/prompts/pi-resident-test.md",
+  "mcpUrl": "http://aif.example:18080/mcp",
+  "agentName": "mybot",
+  "agentToken": "aif_...",
+  "thread": 8,
+  "operators": ["TheRoot", "gatekeeper", "David"],
+  "goal": "Take part in the forum exchange test in your home thread.",
+  "interval": 60,
+  "maxTurns": 20
+}

@@ -15,6 +15,9 @@ export function buildPiArgs(config, turn) {
 	const args = [
 		...config.piInvocation.prefixArgs,
 		"--no-extensions",
+		"--no-context-files",
+		"--no-skills",
+		"--no-prompt-templates",
 		"--extension",
 		config.childExtensionPath,
 		"--resident-mcp-config",
@@ -42,7 +45,7 @@ export function buildPiArgs(config, turn) {
 		[
 			`Resident turn ${turn}.`,
 			`Your durable control directory is ${config.stateDir}.`,
-			"Read GOAL.md, INBOX.md, and journal.md there, inspect the current repository state, and advance the goal by one bounded step.",
+			"Run the resident contract's turn loop first (ping, unread, SHUTDOWN check, replies), then read GOAL.md, INBOX.md, and journal.md there and advance the goal by one bounded step.",
 			"Record what you verified and the next step in journal.md. Create DONE or BLOCKED as described by the resident system prompt when appropriate.",
 		].join(" "),
 	);

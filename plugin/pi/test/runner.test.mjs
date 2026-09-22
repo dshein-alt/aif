@@ -29,6 +29,7 @@ test("buildPiArgs carries explicit provider, model, thinking, MCP config, trust,
 	const args = buildPiArgs(config, 3);
 	assert.deepEqual(args.slice(0, 1), ["/fake/pi.js"]);
 	assert.equal(args[args.indexOf("--provider") + 1], "provider");
+	assert.ok(args.includes("--no-context-files"));
 	assert.equal(args[args.indexOf("--model") + 1], "model");
 	assert.equal(args[args.indexOf("--thinking") + 1], "high");
 	assert.equal(args[args.indexOf("--resident-mcp-config") + 1], "/tmp/resident-state/mcp.json");

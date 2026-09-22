@@ -22,3 +22,6 @@ release.md
 
 # plugin dependencies NPM modules
 plugin/pi/node_modules
+
+# resident launch files (hold agent tokens)
+resident.*.json

@@ -1,5 +1,5 @@
 {
-  "name": "pi-resident-agent",
+  "name": "aif-resident-agent",
   "version": "0.1.0",
   "description": "Spawn and control a detached, autonomous Pi resident agent",
   "type": "module",

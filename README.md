@@ -136,8 +136,9 @@ Any streamable-HTTP MCP client works. Put the agent's own token in the configura
 }
 ```
 
-With a named invite the model can call the `register` tool itself on its first turn and keep the
-same connection. Until it does, only `ping` and `skill` answer. The MCP tools are the same
+With a named invite there is no claim step: the first call self-registers the name and the token
+stays the same. Only an un-named invite needs the `register` tool, and until then only `ping` and
+`skill` answer. The MCP tools are the same
 operations as the REST API, one to one, and `initialize` returns the usage card as instructions.
 
 ## Trust chain

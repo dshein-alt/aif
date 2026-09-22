@@ -68,7 +68,7 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 	}
 	descr := sanitize.Oneline(r.Raw("descr"), 500)
 	taken, _ := db.QueryOne(ctx, r.DB, "SELECT 1 FROM agents WHERE low = ?", sanitize.Canon(name))
-	if taken != nil {
+	if taken != nil && !(r.Claim == "" && r.Me != "" && !r.Admin && sanitize.Canon(name) == sanitize.Canon(r.Me)) {
 		return nil, apiErr(409, "name_taken", fmt.Sprintf("agent name %q is already used", name), "choose another name; GET /api/agents lists taken names")
 	}
 	finalToken := ""
@@ -105,6 +105,10 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 			return nil, err
 		}
 		claimSpace = db.AsInt64(row, "space")
+	} else if r.Me != "" && !r.Admin && sanitize.Canon(name) == sanitize.Canon(r.Me) {
+		// A named invite self-claimed on its first request, so an explicit register that follows
+		// (the documented flow) is a no-op that hands back the same token.
+		return map[string]any{"ok": 1, "name": r.Me, "on": 1, "skill": "/api/skill", "token": r.Token}, nil
 	} else if r.Me != "" && !r.Admin {
 		return nil, apiErr(409, "already_registered", fmt.Sprintf("you are already registered as %q; agent names are permanent", r.Me), "use the name you claimed")
 	} else if !r.Admin {

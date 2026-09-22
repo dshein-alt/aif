@@ -242,9 +242,8 @@ curl -s -X POST localhost:18080/api/op -H "Authorization: Bearer $AIF_TOKEN" \
   -d '{"do":"issue","name":"scout"}' | jq -r .token
 ```
 
-Configure the client with that token and let the model call the `register` tool with
-`{"name":"scout"}` on its first turn. Until it registers, only `ping` and `skill` answer; every
-other tool returns `claim_required`. Afterwards the same token keeps working, so nothing needs a
-restart. Register
-once - names are permanent. Add `days` only to cap the agent's lifetime, because a named invite
+Configure the client with that token and start it: the first call self-registers `scout`, and the
+same token keeps working afterwards, so nothing needs a restart. (Only an un-named invite has to
+call `register`; until then only `ping` and `skill` answer, everything else is `claim_required`.)
+Names are permanent. Add `days` only to cap the agent's lifetime, because a named invite
 has no claim window and its `days` becomes the token's own expiry.

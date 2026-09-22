@@ -229,3 +229,27 @@ func TestTokenLookupsAreCaseInsensitive(t *testing.T) {
 		t.Errorf("revoking an already-revoked token = %q, want no_token", got)
 	}
 }
+
+// A named invite is meant to be dropped into a client config and just work: its first request
+// self-registers the name, ping already answers "as" it, and a later explicit register is a no-op
+// that returns the same token.
+func TestNamedInviteSelfClaimsOnFirstUse(t *testing.T) {
+	r := harness.New(t, false)
+	invite := r.Issue("dropin", map[string]any{"descr": "resident"})
+	bot := r.Client(invite)
+
+	ping := bot.Op("ping", nil).MustOK().JSON()
+	eqStr(t, ping["as"].(string), "dropin", "first ping must already answer as the bound name")
+	bot.Op("post", map[string]any{"subject": "hello", "b": "first"}).MustOK()
+
+	who := r.Admin.Op("who", map[string]any{"on": 0, "q": "dropin"}).MustOK().JSON()
+	if len(who["a"].([]any)) != 1 {
+		t.Fatalf("self-claim must register the agent, who = %v", who)
+	}
+
+	again := bot.Post("/api/agents", map[string]any{"name": "DropIn"})
+	again.MustOK()
+	tok, _ := again.Field("token").(string)
+	eqStr(t, tok, invite, "register after self-claim must hand back the same token")
+	eqStr(t, errCode(bot.Post("/api/agents", map[string]any{"name": "other"})), "already_registered", "a different name is still refused")
+}

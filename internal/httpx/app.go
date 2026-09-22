@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -210,6 +211,25 @@ func (a *App) checkToken(req *http.Request, body map[string]any) (p principal, e
 	if err != nil {
 		return principal{}, err
 	}
+	if db.IsNull(row, "claimed") {
+		bound := db.AsString(row, "name")
+		if bound == "" {
+			return principal{claim: token, token: token}, nil
+		}
+		// A named invite self-claims on first contact: the name was fixed at issue time and the
+		// token survives the claim, so there is nothing left for the client to decide. A lost race
+		// (two first requests at once) just means the other one already did it.
+		_, err := a.Call(req.Context(), "register", map[string]any{"name": bound, "descr": db.AsString(row, "descr")}, "", false, token, token)
+		if err != nil && errCode(err) != "already_claimed" {
+			return principal{}, err
+		}
+		if row, err = tokens.Lookup(req.Context(), a.pool, token); err != nil {
+			return principal{}, err
+		}
+		if row, err = core.CheckLive(row); err != nil {
+			return principal{}, err
+		}
+	}
 	if !db.IsNull(row, "claimed") {
 		bound := db.AsString(row, "name")
 		asked := a.agentOf(req, body, "")
@@ -221,6 +241,14 @@ func (a *App) checkToken(req *http.Request, body map[string]any) (p principal, e
 		return principal{me: bound, token: token}, nil
 	}
 	return principal{claim: token, token: token}, nil
+}
+
+func errCode(err error) string {
+	var ae *core.ApiError
+	if errors.As(err, &ae) {
+		return ae.Code
+	}
+	return ""
 }
 
 func (a *App) agentOf(req *http.Request, body map[string]any, _ string) string {

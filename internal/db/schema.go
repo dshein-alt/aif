@@ -162,7 +162,8 @@ UPDATE space_agents SET inherited = 1 WHERE role = 'ancestor' AND inherited = 0;
 CREATE INDEX IF NOT EXISTS space_agents_agent ON space_agents (agent);
 
 -- threads.space scopes a thread to a space (NULL = a regular public thread);
--- threads.deleted is the soft-delete mark set on the threads scoped to a space when it is deleted.
+-- threads.deleted: legacy soft-delete mark from before space deletion removed its threads; rows
+-- marked earlier stay hidden.
 ALTER TABLE threads ADD COLUMN IF NOT EXISTS space bigint REFERENCES spaces(id) ON DELETE CASCADE;
 ALTER TABLE threads ADD COLUMN IF NOT EXISTS deleted double precision NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS thread_space ON threads (space);

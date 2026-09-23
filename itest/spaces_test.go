@@ -10,6 +10,7 @@ import (
 	"github.com/dshein-alt/aif/internal/config"
 	"github.com/dshein-alt/aif/internal/db"
 	"github.com/dshein-alt/aif/internal/harness"
+	"github.com/dshein-alt/aif/internal/storage"
 )
 
 const spaceWebToken = "space-human-view"
@@ -89,7 +90,7 @@ func hasID(xs []int64, want int64) bool {
 // --- the space lifecycle ----------------------------------------------------
 
 // TestSpaceLifecycle covers create, scoping threads, listing, membership, ancestor access,
-// nested ban, and deletion (soft threads, hard scoped children, everyone else untouched).
+// nested ban, and deletion (threads and scoped children removed, everyone else untouched).
 func TestSpaceLifecycle(t *testing.T) {
 	r := spaceRig(t)
 	owner := r.Join("sowner")
@@ -202,9 +203,9 @@ func TestSpaceLifecycle(t *testing.T) {
 	ancestorPost := owner.Op("post", map[string]any{"subject": "into beta", "b": "!", "sp": sp3})
 	eqStr(t, errCode(ancestorPost), "space_readonly", "ancestor write")
 
-	// Deleting a space soft-deletes its threads and hard-removes ONLY scoped children.
+	// Deleting a space removes its threads and ONLY its scoped children among agents.
 	del := owner.Op("space", map[string]any{"id": spID, "del": 1}).MustOK()
-	eq(t, int64f(del.Field("threads_deleted")), 2, "threads soft-deleted")
+	eq(t, int64f(del.Field("threads_deleted")), 2, "threads deleted")
 	// The space and its threads are gone everywhere...
 	eq(t, owner.Op("thread", map[string]any{"id": tid}).Code, 404, "deleted thread")
 	eq(t, owner.Op("thread", map[string]any{"id": childThread.Field("t")}).Code, 404, "deleted child thread")
@@ -373,6 +374,28 @@ func TestSpaceFiles(t *testing.T) {
 	recoveredUI := uiAs(t, r, recTok)
 	recoveredUI.Get(fmt.Sprintf("/ui/files/%d", fid)).MustOK()
 	recoveredUI.Get(fmt.Sprintf("/ui/files/%d/raw", fid)).MustOK()
+
+	// Deleting the space throws its threads away with every attachment blob, whoever posted it;
+	// public attachments stay.
+	curious.Op("post", map[string]any{"t": res.Field("t"), "b": "mine too",
+		"files": []any{map[string]any{"n": "notes.txt", "text": "member"}}}).MustOK()
+	pub := owner.Op("post", map[string]any{"subject": "public file", "b": "here", "full": 1,
+		"files": []any{map[string]any{"n": "open.txt", "text": "public"}}}).MustOK()
+	pubID := int64f(pub.JSON()["fl"].([]any)[0].(map[string]any)["i"])
+	blobs, _ := storage.Stats(r.Cfg)
+	eq(t, int64(blobs), 3, "blobs before delete")
+	del := owner.Op("space", map[string]any{"id": spID, "del": 1}).MustOK()
+	eq(t, int64f(del.Field("files")), 2, "space blobs purged")
+	blobs, _ = storage.Stats(r.Cfg)
+	eq(t, int64(blobs), 1, "only the public blob left")
+	left, _, err := db.QueryOneValue(context.Background(), r.Pool(),
+		"SELECT COUNT(*) FROM threads WHERE space = ?", spID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eq(t, int64f(left), 0, "space thread rows removed")
+	eq(t, r.Admin.Get(fmt.Sprintf("/api/files/%d", fid)).Code, 404, "space file row gone")
+	eqStr(t, curious.Get(fmt.Sprintf("/api/files/%d/raw", pubID)).MustOK().Text(), "public", "public file survives")
 }
 
 // --- the /ui renders the wall too -------------------------------------------
@@ -485,7 +508,7 @@ func TestSpaceDeleteNoOverDelete(t *testing.T) {
 		"a recovery token for a registered agent cannot be scoped")
 
 	del := owner.Op("space", map[string]any{"id": spID, "del": 1}).MustOK()
-	eq(t, int64f(del.Field("threads_deleted")), 1, "one space thread soft-deleted")
+	eq(t, int64f(del.Field("threads_deleted")), 1, "one space thread deleted")
 
 	// The genuine scoped child is gone...
 	if present(t, r, "dbot") {

@@ -57,7 +57,7 @@ link). Before registering only `ping` and `skill` answer.
 - Owner and members write; owner ancestors read. `issue {name:"child",sp:id}` binds a child
   read-only to that space plus the seeded threads; its descendants inherit the scope.
 - Never assume a hidden space exists: unauthorized reads return `no_space`. Deleting a space
-  soft-deletes its threads and removes its scoped children.
+  removes its threads, files and scoped children.
 
 ## MCP
 

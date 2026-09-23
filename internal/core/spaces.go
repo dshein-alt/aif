@@ -12,8 +12,9 @@ package core
 //	ancestor - a parent/grandparent on the owner's trust chain at creation time; read-only
 //	           inheritance; survives the space's deletion untouched
 //
-// Deleting a space is a soft delete: the space row and its threads are marked deleted (rows stay);
-// only the scoped children - who exist solely inside the space - are physically removed.
+// Deleting a space throws its content away: its threads (with their messages and attachment blobs)
+// and its scoped children - who exist solely inside the space - are physically removed. Only the
+// space row stays, marked deleted, as a tombstone (spaces {dead:1}).
 // Nothing nests: a scoped child may never create a space of its own.
 
 import (
@@ -54,7 +55,7 @@ func init() {
 			"name":  "space name for new=1 (one line)",
 			"descr": "one-line description for new=1",
 			"id":    "target space id; id alone reads it",
-			"del":   "1 = soft-delete the space (its threads are marked deleted; scoped children are removed); owner only",
+			"del":   "1 = delete the space: its threads, messages, files and scoped children are removed; owner only",
 			"add":   "agent name to grant read/write membership (owner only)",
 			"rm":    "member name to withdraw (owner only)",
 			"th":    "0 = skip thread headers in the info reply (default 1)",
@@ -622,12 +623,22 @@ func upsertSpaceAgentAncestor(ctx context.Context, d db.DB, spaceID int64, agent
 	return err
 }
 
-// deleteSpace soft-deletes the space and its threads and hard-removes the scoped children (and
-// their token subtrees). owner/member/ancestor rows and agents survive untouched.
+// deleteSpace hard-removes the space's threads (messages, files and their blobs cascade), the
+// scoped children and their token subtrees, then tombstones the space row. owner/member/ancestor
+// agents survive untouched.
 func deleteSpace(ctx context.Context, d db.DB, cfg *config.Config, space map[string]any) (any, error) {
 	id := db.AsInt64(space, "id")
 	now := db.Now()
-	trows, err := db.QueryRows(ctx, d, "UPDATE threads SET deleted = ? WHERE space = ? AND deleted = 0 RETURNING id", now, id)
+	// Collect the blob keys first: the file rows go with the threads' cascade, the blobs do not.
+	blobs := []string{}
+	brows, err := db.QueryRows(ctx, d, "SELECT f.key FROM files f JOIN messages m ON m.id = f.mid JOIN threads th ON th.id = m.thread WHERE th.space = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range brows {
+		blobs = append(blobs, db.AsString(b, "key"))
+	}
+	trows, err := db.QueryRows(ctx, d, "DELETE FROM threads WHERE space = ? RETURNING id", id)
 	if err != nil {
 		return nil, err
 	}
@@ -673,7 +684,7 @@ func deleteSpace(ctx context.Context, d db.DB, cfg *config.Config, space map[str
 	if _, err := db.Exec(ctx, d, "UPDATE spaces SET deleted = ? WHERE id = ? AND deleted = 0", now, id); err != nil {
 		return nil, err
 	}
-	return map[string]any{"ok": 1, "sp": id, "threads_deleted": len(trows), "removed": removed}, nil
+	return map[string]any{"ok": 1, "sp": id, "threads_deleted": len(trows), "removed": removed, "files": PurgeBlobs(cfg, blobs)}, nil
 }
 
 // bindScopedChild materialises the scoped relationship when an agent claims a token that was

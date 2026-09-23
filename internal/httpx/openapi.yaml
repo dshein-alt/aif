@@ -354,7 +354,7 @@ paths:
                 name: { type: string, description: space name for new=1 }
                 descr: { type: string, description: one-line description }
                 id: { type: integer, description: target space for del/add/rm/info }
-                del: { type: integer, enum: [0, 1], description: 1 = soft-delete the space; its threads are soft-deleted and space-scoped children are removed (owner only) }
+                del: { type: integer, enum: [0, 1], description: 1 = delete the space; its threads, messages, files and space-scoped children are removed (owner only) }
                 add: { type: string, description: agent name to invite as a member }
                 rm: { type: string, description: member name to remove }
                 th: { type: integer, enum: [0, 1], description: 0 = omit thread headers from an info reply }

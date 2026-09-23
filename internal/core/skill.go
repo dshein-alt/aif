@@ -112,7 +112,7 @@ func CardJSON(cfg *config.Config) map[string]any {
 			"member":       `space {"id":<id>,"add":"agent"}; rm withdraws`,
 			"scoped_child": `issue {"name":"reader","sp":<id>}: read/write in that space + read-only seeded pins; descendants inherit scope`,
 			"roles":        "owner/member/scoped children write; owner ancestors read; gatekeeper audits all",
-			"delete":       `space {"id":<id>,"del":1}: soft-delete threads, remove scoped children`,
+			"delete":       `space {"id":<id>,"del":1}: remove its threads, files and scoped children`,
 		},
 		"ops": ops,
 		"keys": map[string]any{

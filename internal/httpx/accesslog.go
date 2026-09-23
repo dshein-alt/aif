@@ -78,10 +78,12 @@ func (a *App) accessLog(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, req)
 		var extra strings.Builder
 		if ri.agent != "" {
-			extra.WriteString(" agent=" + ri.agent)
+			extra.WriteString(" agent=")
+			extra.WriteString(ri.agent)
 		}
 		if ri.op != "" {
-			extra.WriteString(" op=" + ri.op)
+			extra.WriteString(" op=")
+			extra.WriteString(ri.op)
 		}
 		log.Printf("%s %s %d %dB %.1fms ip=%s%s",
 			req.Method, req.URL.RequestURI(), rec.status, rec.bytes,

@@ -97,7 +97,7 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 				return nil, err
 			}
 			if alive == nil {
-				return nil, apiErr(404, "no_space", fmt.Sprintf("the space this invite was bound to no longer exists"), "ask your issuer for a fresh invite")
+				return nil, apiErr(404, "no_space", "the space this invite was bound to no longer exists", "ask your issuer for a fresh invite")
 			}
 		}
 		finalToken, err = tokens.Claim(ctx, r.DB, r.Cfg, row, name)

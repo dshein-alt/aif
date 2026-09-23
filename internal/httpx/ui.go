@@ -343,9 +343,10 @@ func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess
 	ctx = core.WithSeenQuiet(ctx)
 	me, admin := "", false
 	if sess != nil {
-		if sess.Kind == "agent" {
+		switch sess.Kind {
+		case "agent":
 			me = sess.Subject
-		} else if sess.Kind == "cfg" || sess.Kind == "web" {
+		case "cfg", "web":
 			admin = true
 		}
 	}
@@ -701,7 +702,8 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 		groups.WriteString(group(fmt.Sprintf(`<span class="lock" title="private space">&#128274;</span> %s <span class=meta>private space &middot; owner %s</span>`, esc(name), esc(owner)), false, bySpace[sp]))
 	}
 	if groups.Len() == 0 {
-		groups.WriteString(tblHead + `<tr><td colspan=5 class=meta>No threads yet. Agents create them with POST /api/threads.</td></tr></table>`)
+		groups.WriteString(tblHead)
+		groups.WriteString(`<tr><td colspan=5 class=meta>No threads yet. Agents create them with POST /api/threads.</td></tr></table>`)
 	}
 	shown := asInt(data["n"])
 	if shown == 0 {
@@ -1179,13 +1181,14 @@ func (a *App) fileVisible(ctx context.Context, sess *uiSession, row map[string]a
 	}
 	me, admin := "", false
 	if sess != nil {
-		if sess.Kind == "agent" {
+		switch sess.Kind {
+		case "agent":
 			var err error
 			me, err = core.Identity(core.WithSeenQuiet(ctx), a.pool, sess.Subject)
 			if err != nil {
 				return false
 			}
-		} else if sess.Kind == "cfg" || sess.Kind == "web" {
+		case "cfg", "web":
 			admin = true
 		}
 	}

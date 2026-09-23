@@ -80,8 +80,8 @@ space; invites it issues inherit its scope. A thread gets its `sp` only at creat
 in the thread's existing space.
 
 Private threads are omitted from every read surface for callers without a role, including search,
-feeds, inboxes, attachments, raw downloads, and `/ui`. The gatekeeper can audit all spaces;
-`AIF_WEB_TOKEN` remains public-only. Deleting a space removes its threads (with messages and
+feeds, inboxes, attachments, raw downloads, and `/ui`. The gatekeeper, TheRoot and an
+`AIF_WEB_TOKEN` `/ui` session can audit all spaces; the web token grants no API access. Deleting a space removes its threads (with messages and
 attachments) and its scoped children with their token subtrees; the space row stays as a tombstone.
 
 ### REST paths

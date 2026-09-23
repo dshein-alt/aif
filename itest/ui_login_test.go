@@ -141,7 +141,7 @@ func TestAgentSessionDiesWithTheCredential(t *testing.T) {
 	c := r.NoRedirect()
 	res := loginForm(c, r.Tokens["bob"], "/ui/agents")
 	eqStr(t, res.Header.Get("Location"), "/ui/agents", "agent login next")
-	contains(t, c.Get("/ui").Text(), "bob", "sign out shows name")
+	contains(t, c.Get("/ui").Text(), ">Logout</button>", "logout control")
 	r.Admin.Op("revoke", map[string]any{"name": "bob"}).MustOK()
 	eq(t, c.Get("/ui").Code, 401, "agent session dies on revoke")
 }

@@ -356,8 +356,8 @@ func TestSpaceFiles(t *testing.T) {
 	eq(t, curious.Get(fmt.Sprintf("/api/files/%d", fid)).Code, 404, "stranger meta")
 	eq(t, curious.Get(fmt.Sprintf("/api/files/%d/raw", fid)).Code, 404, "stranger raw")
 	web := uiAs(t, r, spaceWebToken)
-	eq(t, web.Get(fmt.Sprintf("/ui/files/%d", fid)).Code, 404, "web-token UI file page")
-	eq(t, web.Get(fmt.Sprintf("/ui/files/%d/raw", fid)).Code, 404, "web-token UI raw file")
+	web.Get(fmt.Sprintf("/ui/files/%d", fid)).MustOK()
+	eqStr(t, web.Get(fmt.Sprintf("/ui/files/%d/raw", fid)).MustOK().Text(), "secret", "web-token private attachment")
 
 	owner.Op("space", map[string]any{"id": spID, "add": "fcurious"}).MustOK()
 	curious.Op("dl", map[string]any{"id": fid, "text": 1}).MustOK()
@@ -415,12 +415,13 @@ func TestSpaceUIGroups(t *testing.T) {
 		t.Fatalf("stranger thread page: got %d, want 404", c)
 	}
 
-	// The human-view token is not an operator credential: it sees public threads only.
+	// The human-view token audits all spaces through the read-only UI, never the API.
 	web := uiAs(t, r, spaceWebToken)
-	if page := web.Get("/ui").MustOK().Text(); strings.Contains(page, "ui secret") || strings.Contains(page, "ui-lab") {
-		t.Fatal("web-token session leaked a private space in the index")
-	}
-	eq(t, web.Get(fmt.Sprintf("/ui/thread/%d", tid)).Code, 404, "web-token private thread")
+	webPage := web.Get("/ui").MustOK().Text()
+	contains(t, webPage, "ui secret", "web-token private thread in index")
+	contains(t, webPage, "ui-lab", "web-token private space in index")
+	web.Get(fmt.Sprintf("/ui/thread/%d", tid)).MustOK()
+	eqStr(t, errCode(r.Client(spaceWebToken).Op("post", map[string]any{"t": tid, "b": "forbidden"})), "web_token", "web token cannot write through API")
 }
 
 // --- regression: scoped children can actually read the pins (review #1) ------

@@ -89,6 +89,7 @@ nav{display:flex;gap:.9rem;flex-wrap:wrap;margin:.5rem 0 1rem;padding-bottom:.5r
 a{color:#2b5fbf;text-decoration:none}a:hover{text-decoration:underline}
 table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #e3e5ea;vertical-align:top}
 th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:#6b7280}
+tr[id]{scroll-margin-top:1rem}tr:target{outline:2px solid #8a3ffc;outline-offset:-2px}
 td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .msg{display:flex;border:1px solid #d8dae0;border-radius:.5rem;margin:.6rem 0;background:#fff;overflow:hidden;scroll-margin-top:.5rem}
 .msg .who-card{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:.45rem;text-align:center;padding:.55rem .5rem;flex:0 0 7.5rem;width:7.5rem;border-right:1px solid #e6e8ec}
@@ -150,7 +151,7 @@ const k='aif:scroll:'+location.pathname+location.search, iv=__MS__;
 const bottom=()=>innerHeight+scrollY >= document.documentElement.scrollHeight - 24;
 let hidden=0;
 addEventListener('pagehide',()=>{sessionStorage.setItem(k,bottom()?'bottom':String(Math.round(scrollY)));});
-addEventListener('load',()=>{const v=sessionStorage.getItem(k);if(v===null)return;sessionStorage.removeItem(k);scrollTo(0,v==='bottom'?document.documentElement.scrollHeight:+v);});
+addEventListener('load',()=>{if(location.hash)return;const v=sessionStorage.getItem(k);if(v===null)return;sessionStorage.removeItem(k);scrollTo(0,v==='bottom'?document.documentElement.scrollHeight:+v);});
 setInterval(()=>{if(!document.hidden)location.reload();},iv);
 addEventListener('visibilitychange',()=>{if(document.hidden){hidden=Date.now();}else if(hidden&&Date.now()-hidden>=iv){location.reload();}});
 </script>`
@@ -289,11 +290,7 @@ func uiLink(path string, params url.Values) string {
 func (a *App) page(w http.ResponseWriter, title, body string, sess *uiSession, status, refresh int) {
 	links := `<a href=/ui>Threads</a> <a href=/ui/agents>Agents</a> <a href=/ui/tokens>Tokens</a> <a href=/api/skill>Skill card</a>`
 	if sess != nil {
-		who := sess.Subject
-		if sess.Kind != "agent" {
-			who = sess.Kind
-		}
-		links += fmt.Sprintf(` <form class=inline method=post action="/ui/logout"><button class=link type=submit>sign out (%s)</button></form>`, esc(who))
+		links += ` <form class=inline method=post action="/ui/logout"><button class=link type=submit>Logout</button></form>`
 	}
 	note := ""
 	if refresh > 0 {
@@ -339,7 +336,7 @@ func (a *App) mountUIRoutes(r chi.Router) {
 }
 
 // uiCall runs an op for the /ui viewer itself: an agent session acts as its agent, a web-token
-// session gets the public view, and only a config-token session gets the operator view. /ui is
+// session and a config-token session get the audit view of all spaces. /ui is
 // read-only: it never calls write ops. Identity is resolved quietly — the browser repolls on every
 // paint, so a /ui load must not count as the agent being active.
 func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess *uiSession) (map[string]any, error) {
@@ -348,7 +345,7 @@ func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess
 	if sess != nil {
 		if sess.Kind == "agent" {
 			me = sess.Subject
-		} else if sess.Kind == "cfg" {
+		} else if sess.Kind == "cfg" || sess.Kind == "web" {
 			admin = true
 		}
 	}
@@ -571,7 +568,39 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 	by := req.URL.Query().Get("by")
 	offset := queryInt(req, "offset", 0)
 	limit := queryInt(req, "limit", 25)
-	data, err := a.uiCall(req.Context(), "threads", map[string]any{"q": q, "by": by, "limit": int64(limit), "offset": int64(offset)}, sess)
+	focus := int64(queryInt(req, "focus", 0))
+	if focus > 0 {
+		// Resolve through the viewer's permissions before looking for the containing page.
+		if _, err := a.uiCall(req.Context(), "thread", map[string]any{"id": focus, "msgs": false, "pin": false}, sess); err != nil {
+			a.page(w, "Not found", fmt.Sprintf("<p class=meta>%s</p>", esc(apiMsg(err))), sess, statusOf(err), 0)
+			return
+		}
+		offset = 0
+	}
+	var data map[string]any
+	var err error
+	for {
+		data, err = a.uiCall(req.Context(), "threads", map[string]any{"q": q, "by": by, "limit": int64(limit), "offset": int64(offset)}, sess)
+		if err != nil || focus <= 0 {
+			break
+		}
+		found := false
+		for _, thread := range uiRows(data["th"]) {
+			if tid(thread) == focus {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+		if next := int(asInt(data["next_offset"])); next > offset {
+			offset = next
+		} else {
+			// The thread may have moved or disappeared, or been excluded by a filter.
+			focus, offset = 0, 0
+		}
+	}
 	if err != nil {
 		a.page(w, "Error", fmt.Sprintf("<p class=meta>%s</p>", esc(err.Error())), sess, statusOf(err), 0)
 		return
@@ -612,11 +641,11 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 	}
 	rowHTML := func(t map[string]any) string {
 		return fmt.Sprintf(
-			"<tr><td class=n>%d</td><td><a href=%s>%s%s</a>"+
+			`<tr id="thread-%d"><td class=n>%d</td><td><a href=%s>%s%s</a>`+
 				"<div class=meta>%s &middot; %s</div></td>"+
 				"<td class=n>%d</td><td class=n>%d</td>"+
 				"<td class=n title=%s>%s</td></tr>",
-			tid(t), uiLink("/ui/thread/"+strconv.FormatInt(tid(t), 10), nil),
+			tid(t), tid(t), uiLink("/ui/thread/"+strconv.FormatInt(tid(t), 10), nil),
 			lockMark(t), esc(str(t, "s")),
 			esc(str(t, "a")), stamp(t["created"]),
 			asInt(t["msgs"]), asInt(t["files"]),
@@ -647,6 +676,11 @@ func (a *App) handleUIIndex(w http.ResponseWriter, req *http.Request) {
 	}
 	tblHead := `<table><tr><th class=n>#</th><th>Thread</th><th class=n>Msgs</th><th class=n>Files</th><th class=n>Active</th></tr>`
 	group := func(title string, open bool, list []map[string]any) string {
+		for _, thread := range list {
+			if tid(thread) == focus {
+				open = true
+			}
+		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "<details%s><summary>%s</summary>%s", mapString(open, ` open`, ""), title, tblHead)
 		for _, t := range list {
@@ -801,8 +835,8 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 				mapString(pageNo < pages, fmt.Sprintf(`<a href=%s>next &rarr;</a>`, uiLink(fmt.Sprintf("/ui/thread/%d", id), url.Values{"page": {strconv.Itoa(pageNo + 1)}, "limit": {strconv.FormatInt(asInt(data["limit"]), 10)}})), ""),
 				pageNo, pages, total)
 	}
-	body := fmt.Sprintf("<h2>%s%s</h2><p class=meta>thread #%d &middot; opened by %s%s &middot; %d messages, %d files &middot; last activity %s</p>%s%s%s%s",
-		lockMark(data), esc(str(data, "s")), asInt(data["i"]), esc(str(data, "a")), spaceNote(data), total, asInt(data["files"]),
+	body := fmt.Sprintf("<h2>%s%s</h2><p class=meta><a href=%s>thread #%d</a> &middot; opened by %s%s &middot; %d messages, %d files &middot; last activity %s</p>%s%s%s%s",
+		lockMark(data), esc(str(data, "s")), fmt.Sprintf("/ui?focus=%d#thread-%d", id, id), asInt(data["i"]), esc(str(data, "a")), spaceNote(data), total, asInt(data["files"]),
 		ago(data["u"], float64(time.Now().Unix())),
 		pinHTML, bar, orMeta(parts.String(), "No messages on this page."), bar+nav)
 	a.page(w, clip(str(data, "s"), 60), body, sess, 0, a.cfg.UIRefresh)
@@ -1151,7 +1185,7 @@ func (a *App) fileVisible(ctx context.Context, sess *uiSession, row map[string]a
 			if err != nil {
 				return false
 			}
-		} else if sess.Kind == "cfg" {
+		} else if sess.Kind == "cfg" || sess.Kind == "web" {
 			admin = true
 		}
 	}

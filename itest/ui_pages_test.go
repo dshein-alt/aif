@@ -140,3 +140,42 @@ func TestUIPagination(t *testing.T) {
 		t.Errorf("clamped page = %d, want 200 page 3 of 3", last.Code)
 	}
 }
+
+// Returning from a thread locates its current page and opens a collapsed private-space group.
+func TestUIThreadReturnToList(t *testing.T) {
+	r := spaceRig(t)
+	owner := r.Join("anchor-owner")
+	r.Join("anchor-stranger")
+	sp := newSpaceAs(t, owner, "anchor-private-space")
+	made := owner.Op("post", map[string]any{"sp": sp, "subject": "anchor-private-thread", "b": "private"}).MustOK()
+	tid := int64f(made.Field("t"))
+	for i := 0; i < 26; i++ {
+		owner.Op("post", map[string]any{"subject": fmt.Sprintf("newer %d", i), "b": "public"}).MustOK()
+	}
+	web := uiAs(t, r, spaceWebToken)
+	anchor := fmt.Sprintf(`id="thread-%d"`, tid)
+	if strings.Contains(web.Get("/ui").MustOK().Text(), anchor) {
+		t.Fatal("old thread should be beyond the first page")
+	}
+	thread := web.Get(fmt.Sprintf("/ui/thread/%d", tid)).MustOK().Text()
+	contains(t, thread, fmt.Sprintf("href=/ui?focus=%d#thread-%d>thread #%d</a>", tid, tid, tid), "return link")
+	focused := web.Get(fmt.Sprintf("/ui?focus=%d", tid)).MustOK().Text()
+	contains(t, focused, anchor, "focused thread on its containing page")
+	contains(t, focused, `<details open><summary><span class="lock"`, "target private group opens")
+	contains(t, focused, "26-29", "focused page range")
+
+	// The link resolves against current activity, not a stale offset from the thread page.
+	owner.Op("post", map[string]any{"t": tid, "b": "bump"}).MustOK()
+	moved := web.Get(fmt.Sprintf("/ui?focus=%d", tid)).MustOK().Text()
+	contains(t, moved, anchor, "moved target still found")
+	contains(t, moved, "1-25", "moved target first page")
+	web.Get("/ui?focus=999999").MustStatus(404)
+
+	// An anchor must not bypass an agent's private-space visibility.
+	outsider := uiAs(t, r, r.Tokens["anchor-stranger"])
+	hidden := outsider.Get(fmt.Sprintf("/ui?focus=%d", tid))
+	hidden.MustStatus(404)
+	if strings.Contains(hidden.Text(), "anchor-private-thread") || strings.Contains(hidden.Text(), "anchor-private-space") {
+		t.Fatal("focused list leaked a hidden thread or space")
+	}
+}

@@ -175,11 +175,11 @@ func opVote(ctx context.Context, r *Req) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if vis.scoped {
-		return nil, apiErr(403, "scoped_readonly", "you are a space-scoped child: read-only, reactions are writes", "")
-	}
 	if !vis.ThreadVisible(db.AsInt64(msg, "thread"), db.AsInt64(thread, "space")) {
 		return nil, apiErr(404, "no_message", fmt.Sprintf("message %d does not exist", mid), "GET /api/threads/{id}?msgs=1 to browse")
+	}
+	if vis.scoped && !vis.ThreadWritable(db.AsInt64(msg, "thread"), db.AsInt64(thread, "space")) {
+		return nil, apiErr(403, "scoped_readonly", "seeded public threads are read-only for scoped children", "react inside your assigned space")
 	}
 	if !r.Admin {
 		if db.AsInt64(thread, "locked") != 0 {

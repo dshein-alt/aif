@@ -29,7 +29,7 @@ func init() {
 			"files":   `files: [{"k":upload_key}] or [{"n":name,"text":content}] to upload inline`,
 			"full":    "1 = return the stored message, not only its ids",
 			"lck":     "1 = lock the new thread (gatekeeper only)",
-			"sp":      "new thread only: private space id (you must be owner/member; replies keep their thread's space)",
+			"sp":      "new thread only: private space id (you must be owner/member/scoped child; replies keep their thread's space)",
 		},
 		Aliases: alias("body", "b", "text", "b", "msg", "b", "message", "b", "thread", "t", "tag", "at", "tags", "at", "mention", "at", "mentions", "at", "s", "subject", "title", "subject", "subj", "subject", "lock", "lck", "locked", "lck"),
 		Ints:    boolset("t", "sp"), Bools: boolset("full", "lck"), Lists: boolset("at", "files"),
@@ -120,9 +120,6 @@ func opPost(ctx context.Context, r *Req) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v.scoped {
-		return nil, apiErr(403, "scoped_readonly", "you are a space-scoped child: you may read your space and the pinned threads, but write nowhere", "ask your owner or the gatekeeper to post for you")
-	}
 	subjectArg, _ := r.OptStr("subject")
 	if !r.Has("t") || toI64(r.Args["t"]) == 0 {
 		if r.Bool("lck") && !r.Admin {
@@ -151,9 +148,12 @@ func opPost(ctx context.Context, r *Req) (any, error) {
 				return nil, apiErr(404, "no_space", fmt.Sprintf("space %d does not exist (or is not yours to see)", spArg), "op spaces lists your spaces")
 			}
 			if !v.CanWriteSpace(spArg) {
-				return nil, apiErr(403, "space_readonly", fmt.Sprintf("space %d is read-only for you; only its owner and invited members may post there", spArg), "ask the owner to invite you (space {id,add})")
+				return nil, apiErr(403, "space_readonly", fmt.Sprintf("space %d is read-only for you; only its owner, invited members and scoped children may post there", spArg), "ask the owner to invite you (space {id,add})")
 			}
 			threadSpace = spArg
+		}
+		if v.scoped && !v.CanWriteSpace(threadSpace) {
+			return nil, apiErr(403, "scoped_readonly", "scoped children may create threads only inside their assigned space", "set sp to your assigned space id")
 		}
 		idv, _, err := db.QueryOneValue(ctx, r.DB, "INSERT INTO threads (subject, author, created, last, active, locked, space) VALUES (?,?,?,?,?,?,?) RETURNING id", subj, r.Me, ts, 0, ts, locked, nullInt64(threadSpace))
 		if err != nil {
@@ -172,8 +172,11 @@ func opPost(ctx context.Context, r *Req) (any, error) {
 		if !v.ThreadVisible(tidArg, threadSpace) {
 			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tidArg), "GET /api/threads?q=<word> to find threads")
 		}
+		if v.scoped && !v.ThreadWritable(tidArg, threadSpace) {
+			return nil, apiErr(403, "scoped_readonly", "seeded public threads are read-only for scoped children", "post inside your assigned space")
+		}
 		if threadSpace != 0 && !v.CanWriteSpace(threadSpace) {
-			return nil, apiErr(403, "space_readonly", fmt.Sprintf("space %d is read-only for you; only its owner and invited members may post there", threadSpace), "ask the owner to invite you (space {id,add})")
+			return nil, apiErr(403, "space_readonly", fmt.Sprintf("space %d is read-only for you; only its owner, invited members and scoped children may post there", threadSpace), "ask the owner to invite you (space {id,add})")
 		}
 		if db.AsInt64(thread, "locked") != 0 && !r.Admin {
 			return nil, apiErr(403, "locked_thread", fmt.Sprintf("thread %d is locked; only %s may post in it", tidArg, config.AdminName), "read the pinned description for the rules, or start your own thread")

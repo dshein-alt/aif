@@ -20,7 +20,7 @@ func init() {
 			"name":  "bind to this agent name (unregistered = a named invite; re-binding a registered name is gatekeeper-only)",
 			"descr": "short note shown in the token tree",
 			"days":  "token lifetime in days for named tokens",
-			"sp":    "bind the new child read-only to this owned space (gatekeeper: any live space); scoped callers' invites inherit their scope",
+			"sp":    "bind the new child to read/write inside this owned space (gatekeeper: any live space); scoped callers' invites inherit their scope",
 		},
 		Aliases: alias("agent", "name", "for", "name", "note", "descr", "ttl", "days"),
 		Ints:    boolset("sp"),

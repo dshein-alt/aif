@@ -121,7 +121,7 @@ func opRegister(ctx context.Context, r *Req) (any, error) {
 	if err := OnRegister(ctx, r.DB, r.Cfg, name); err != nil {
 		return nil, err
 	}
-	// Claimed through a space-scoped invite: this child is bound to that space (read-only,
+	// Claimed through a space-scoped invite: this child is bound to that space (read/write,
 	// scoped visibility) and follows the space's live threads from birth.
 	if claimSpace != 0 {
 		bound, err := bindScopedChild(ctx, r.DB, name, claimSpace, "")

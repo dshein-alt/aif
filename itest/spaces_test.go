@@ -95,7 +95,7 @@ func TestSpaceLifecycle(t *testing.T) {
 	owner := r.Join("sowner")
 	stranger := r.Join("sstranger")
 
-	pubT, _ := newThreadAs(t, stranger, "public topic", "hello all")
+	pubT, pubMsg := newThreadAs(t, stranger, "public topic", "hello all")
 
 	spID := newSpaceAs(t, owner, "lab")
 
@@ -144,8 +144,23 @@ func TestSpaceLifecycle(t *testing.T) {
 		t.Fatalf("scoped child must not see public threads: %v", seen)
 	}
 
-	// Scoped children are read-only everywhere, cannot nest spaces, cannot post publicly.
-	eqStr(t, errCode(bot.Op("post", map[string]any{"t": tid, "b": "may I?"})), "scoped_readonly", "scoped reply")
+	// Scoped children write inside their space, but cannot nest spaces or write publicly.
+	bot.Op("post", map[string]any{"t": tid, "b": "scoped reply"}).MustOK()
+	for _, dir := range []int{1, -1, 0} {
+		bot.Op("vote", map[string]any{"id": int64f(post.Field("i")), "dir": dir}).MustOK()
+	}
+	eq(t, bot.Op("vote", map[string]any{"id": pubMsg, "dir": 1}).Code, 404, "scoped public vote")
+	childThread := bot.Op("post", map[string]any{"subject": "child work", "b": "inside", "sp": spID}).MustOK()
+	eq(t, int64f(childThread.Field("sp")), spID, "child thread stays in scope")
+	eq(t, bot.Op("post", map[string]any{"t": pubT, "b": "leak"}).Code, 404, "scoped public reply")
+	for _, pin := range []int64{1, 2} {
+		pinMsg, _, err := db.QueryOneValue(context.Background(), r.Pool(), "SELECT id FROM messages WHERE thread = ? ORDER BY id LIMIT 1", pin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		eqStr(t, errCode(bot.Op("vote", map[string]any{"id": pinMsg, "dir": 1})), "scoped_readonly", "scoped pin vote")
+		eqStr(t, errCode(bot.Op("post", map[string]any{"t": pin, "b": "leak"})), "scoped_readonly", "scoped pin reply")
+	}
 	eqStr(t, errCode(bot.Op("post", map[string]any{"subject": "leak", "b": "!"})), "scoped_readonly", "scoped public post")
 	eqStr(t, errCode(bot.Op("space", map[string]any{"new": 1, "name": "subspace"})), "nested_space", "nested space")
 
@@ -157,6 +172,8 @@ func TestSpaceLifecycle(t *testing.T) {
 	}
 	// A scoped child cannot be invited into another space.
 	sp2 := newSpaceAs(t, owner, "lab2")
+	eq(t, bot.Op("post", map[string]any{"subject": "leak", "b": "!", "sp": sp2}).Code, 404, "scoped other-space creation")
+	sub.Op("post", map[string]any{"t": tid, "b": "inherited scoped reply"}).MustOK()
 	eqStr(t, errCode(owner.Op("space", map[string]any{"id": sp2, "add": "sbot"})), "bound_agent", "invite a bound child")
 
 	// Members get read+write; they cannot manage the space.
@@ -187,9 +204,10 @@ func TestSpaceLifecycle(t *testing.T) {
 
 	// Deleting a space soft-deletes its threads and hard-removes ONLY scoped children.
 	del := owner.Op("space", map[string]any{"id": spID, "del": 1}).MustOK()
-	eq(t, int64f(del.Field("threads_deleted")), 1, "threads soft-deleted")
+	eq(t, int64f(del.Field("threads_deleted")), 2, "threads soft-deleted")
 	// The space and its threads are gone everywhere...
 	eq(t, owner.Op("thread", map[string]any{"id": tid}).Code, 404, "deleted thread")
+	eq(t, owner.Op("thread", map[string]any{"id": childThread.Field("t")}).Code, 404, "deleted child thread")
 	if hasID(threadIDs(owner.Op("threads", map[string]any{"limit": 50}).MustOK()), tid) {
 		t.Fatal("deleted space thread still listed")
 	}

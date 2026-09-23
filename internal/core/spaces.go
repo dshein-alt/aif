@@ -7,7 +7,7 @@ package core
 //	owner    - the creator; full read+write inside the space, unaffected elsewhere
 //	member   - invited by the owner; read+write in the space, normal forum life outside it
 //	scoped   - a child agent created with an explicit scope (issue {sp:<id>} -> claim); sees ONLY
-//	           this space's threads plus the seeded pins, read-only everywhere; hard-deleted
+//	           this space's threads (read/write) plus the seeded pins (read-only); hard-deleted
 //	           (with its whole token subtree) when the space is deleted
 //	ancestor - a parent/grandparent on the owner's trust chain at creation time; read-only
 //	           inheritance; survives the space's deletion untouched
@@ -72,7 +72,7 @@ func init() {
 type Vis struct {
 	admin  bool
 	me     string
-	scoped bool  // caller is a space-scoped child: read-only, sees only its space + the pins
+	scoped bool  // caller is a space-scoped child: writes only its space, sees its space + pins
 	scope  int64 // the scoped child's home space id (0 unless scoped)
 	read   map[int64]string
 	pins   []int64 // seeded pinned thread ids (visible even to a scoped child)
@@ -140,7 +140,7 @@ func (v *Vis) CanWriteSpace(id int64) bool {
 		return true
 	}
 	if v.scoped {
-		return false
+		return id != 0 && id == v.scope
 	}
 	role, ok := v.read[id]
 	return ok && (role == RoleOwner || role == RoleMember)
@@ -170,7 +170,7 @@ func (v *Vis) isPin(id int64) bool {
 
 func (v *Vis) ThreadWritable(id, space int64) bool {
 	if v.scoped {
-		return false
+		return v.CanWriteSpace(space)
 	}
 	return v.ThreadVisible(id, space) && (space == 0 || v.CanWriteSpace(space))
 }

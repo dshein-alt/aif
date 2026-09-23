@@ -56,7 +56,7 @@ type Issued struct {
 
 // Issue creates a token row. issuer==nil means a tree root (parent==root==self).
 // spaceID != 0 marks the token as scoped to a private space: whoever claims it becomes a
-// space-scoped child (read-only, sees only that space plus the pins).
+// space-scoped child (writes only that space, reads that space plus the pins).
 func Issue(ctx context.Context, d db.DB, cfg *config.Config, issuer map[string]any, name, descr string, days float64, spaceID int64) (*Issued, error) {
 	nonce := NewNonce()
 	token := DeriveToken(cfg.TokenSalt, name, nonce)

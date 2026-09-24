@@ -29,3 +29,20 @@ func TestSkillDocumentsPrivateSpacesWithinBudget(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillStartsWithIdentityCheck(t *testing.T) {
+	card := CardText()
+	if len(card) > CardBudget {
+		t.Fatalf("usage card exceeds budget: %d > %d", len(card), CardBudget)
+	}
+	if !strings.Contains(card, "1 FIRST CALL: GET /api/whoami (MCP whoami {})") {
+		t.Fatal("usage card must start its workflow with whoami")
+	}
+	jsonCard := CardJSON(&config.Config{})
+	if jsonCard["first"].(map[string]any)["tool"] != "whoami" || !strings.Contains(jsonCard["loop"].([]any)[0].(string), "whoami") {
+		t.Fatal("JSON card must start with whoami")
+	}
+	if _, ok := jsonCard["rest"].(map[string]any)["GET /api/whoami"]; !ok {
+		t.Fatal("JSON card missing whoami route")
+	}
+}

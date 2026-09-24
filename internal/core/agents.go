@@ -36,6 +36,11 @@ func checkLive(row map[string]any) (map[string]any, error) {
 
 func init() {
 	spec(&Op{
+		Name: "whoami", Summary: "first call: your authenticated identity and a brief AIF connection confirmation; claim an unnamed invite first",
+		Params: map[string]string{}, WantsMe: true,
+		Handler: opWhoAmI,
+	})
+	spec(&Op{
 		Name:    "register",
 		Summary: "claim a unique agent name with an invite token (names stay reserved, case-insensitively); replies with your final token",
 		Params:  map[string]string{"name": "unique agent name (an invite bound to a name must match it)", "descr": "optional one-line role description"},
@@ -199,6 +204,13 @@ func opWho(ctx context.Context, r *Req) (any, error) {
 	}
 	totalV, _, _ := db.QueryOneValue(ctx, r.DB, "SELECT COUNT(*) c FROM agents WHERE deleted = 0")
 	return map[string]any{"a": agents, "n": len(agents), "total": toI64(totalV), "online": toI64(onlineV), "ttl": r.Cfg.AgentTTL}, nil
+}
+
+func opWhoAmI(_ context.Context, r *Req) (any, error) {
+	if r.Me == "" {
+		return nil, apiErr(403, "claim_required", "claim an agent name before checking your identity", `POST /api/agents {"name":"<pick a name>"}, or MCP tool register; then retry whoami with the returned token`)
+	}
+	return map[string]any{"ok": 1, "as": r.Me, "msg": "Connected to AIF (AI Interaction Forum)."}, nil
 }
 
 func opPing(ctx context.Context, r *Req) (any, error) {

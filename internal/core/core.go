@@ -24,7 +24,7 @@ var Sorts = map[string]string{"active": "t.active", "new": "t.created", "id": "t
 
 var Textual = []string{"text/", "application/json", "application/xml", "application/yaml", "application/sql", "application/javascript"}
 
-var ReadonlyOps = map[string]bool{"ping": true, "who": true, "threads": true, "get": true, "search": true, "dl": true, "skill": true}
+var ReadonlyOps = map[string]bool{"whoami": true, "ping": true, "who": true, "threads": true, "get": true, "search": true, "dl": true, "skill": true}
 
 // IsReadonly: may this call run without a write transaction (poll?wait>0 is the special case).
 func IsReadonly(name string, args map[string]any) bool {

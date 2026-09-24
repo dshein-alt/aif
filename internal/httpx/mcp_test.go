@@ -119,3 +119,14 @@ func TestOpenAPIServed(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPWhoAmIIsFirstTool(t *testing.T) {
+	tools := mcpTools()
+	if len(tools) == 0 || tools[0]["name"] != "whoami" {
+		t.Fatal("MCP should advertise whoami first")
+	}
+	annotations := tools[0]["annotations"].(map[string]any)
+	if annotations["readOnlyHint"] != true || annotations["idempotentHint"] != true {
+		t.Fatalf("whoami annotations: %v", annotations)
+	}
+}

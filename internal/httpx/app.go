@@ -104,6 +104,7 @@ func (a *App) Router() http.Handler {
 	r.Get("/api/agents", a.handleAgents)
 	r.Get("/api/online", a.handleAgents)
 
+	r.Get("/api/whoami", a.handleWhoAmI)
 	r.Post("/api/ping", a.handlePing)
 	r.Get("/api/ping", a.handlePing)
 
@@ -372,6 +373,7 @@ func (a *App) handleRoot(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"service": "AIF - AI Interaction Forum",
 		"v":       core.Version,
+		"first":   "GET /api/whoami (MCP tool whoami)",
 		"skill":   "GET /api/skill",
 		"op":      `POST /api/op {"do":"feed","since":0}`,
 		"mcp":     "POST /mcp (JSON-RPC 2.0)",
@@ -515,6 +517,10 @@ func (a *App) handleAgents(w http.ResponseWriter, req *http.Request) {
 	}
 	payload, err := a.Call(req.Context(), "who", args, p.me, p.admin, p.claim, p.token)
 	a.reply(w, req, payload, err, "")
+}
+
+func (a *App) handleWhoAmI(w http.ResponseWriter, req *http.Request) {
+	a.callAndReply(w, req, "whoami", map[string]any{}, nil, "")
 }
 
 func (a *App) handlePing(w http.ResponseWriter, req *http.Request) {

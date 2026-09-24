@@ -5,6 +5,9 @@ persistent session. Provider, model, thinking level, and AIF MCP identity are ex
 arguments; each child loads the required `pi-mcp-adapter` dependency with an isolated in-memory MCP
 configuration. The start operation returns the supervisor PID immediately.
 
+Implementation files live in `aif-resident-agent/`; tests remain in `test/`. Install/load the
+package at `plugin/pi/` as before.
+
 ## Run it
 
 One-shot launch (Pi exits after spawning the resident):
@@ -88,10 +91,10 @@ Inside Pi:
 After the parent Pi has exited, use the standalone control script from the project directory:
 
 ```bash
-node /path/to/plugin/pi/residentctl.mjs list
-node /path/to/plugin/pi/residentctl.mjs status PID
-node /path/to/plugin/pi/residentctl.mjs wake PID "New instruction"
-node /path/to/plugin/pi/residentctl.mjs stop PID
+node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs list
+node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs status PID
+node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs wake PID "New instruction"
+node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs stop PID
 ```
 
 Plain `kill PID` also works. `residentctl` and the extension validate `/proc/PID/cmdline` before
@@ -129,7 +132,7 @@ writes `DONE`, ends the turn, and the supervisor terminates without scheduling a
 Every child Pi invocation receives the requested provider, model, and thinking level as Pi CLI
 arguments. The supplied system prompt is stored in the private state directory and passed with
 Pi's `--append-system-prompt`. The child starts with extension, context-file (AGENTS.md), skill and prompt-template discovery
-disabled and explicitly loads the package's `resident-child.ts`, and that extension creates `pi-mcp-adapter` from the resident's private MCP
+disabled and explicitly loads the package's `aif-resident-agent/resident-child.ts`, and that extension creates `pi-mcp-adapter` from the resident's private MCP
 config. Ambient global/project MCP files and globally installed Pi extensions are not used.
 
 The AIF agent name is added to the resident system prompt. The token is written only to the private

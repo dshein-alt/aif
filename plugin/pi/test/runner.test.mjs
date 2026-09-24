@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { buildPiArgs, runResident } from "../runner.mjs";
+import { buildPiArgs, runResident } from "../aif-resident-agent/runner.mjs";
 
 function exampleConfig(stateDir) {
 	return {
@@ -17,7 +17,7 @@ function exampleConfig(stateDir) {
 		model: "model",
 		thinkingLevel: "high",
 		mcpConfigPath: path.join(stateDir, "mcp.json"),
-		childExtensionPath: "/plugin/pi/resident-child.ts",
+		childExtensionPath: "/plugin/pi/aif-resident-agent/resident-child.ts",
 		agentName: "resident-test",
 		trustedProject: true,
 		piInvocation: { command: process.execPath, prefixArgs: ["/fake/pi.js"] },
@@ -33,7 +33,7 @@ test("buildPiArgs carries explicit provider, model, thinking, MCP config, trust,
 	assert.equal(args[args.indexOf("--model") + 1], "model");
 	assert.equal(args[args.indexOf("--thinking") + 1], "high");
 	assert.equal(args[args.indexOf("--resident-mcp-config") + 1], "/tmp/resident-state/mcp.json");
-	assert.equal(args[args.indexOf("--extension") + 1], "/plugin/pi/resident-child.ts");
+	assert.equal(args[args.indexOf("--extension") + 1], "/plugin/pi/aif-resident-agent/resident-child.ts");
 	assert.ok(args.includes("--no-extensions"));
 	assert.ok(!args.includes("--tools"));
 	assert.equal(args[args.indexOf("--session-id") + 1], "abc123");

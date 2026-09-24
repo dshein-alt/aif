@@ -45,7 +45,7 @@ test("buildPiArgs carries explicit provider, model, thinking, MCP config, trust,
 test("supervisor runs a bounded turn and records final metadata", async () => {
 	const stateDir = await mkdtemp(path.join(tmpdir(), "pi-resident-test-"));
 	await mkdir(path.join(stateDir, "sessions"));
-	for (const name of ["SYSTEM.md", "GOAL.md", "INBOX.md", "journal.md"]) {
+	for (const name of ["SYSTEM.md", "GOAL.md", "journal.md"]) {
 		await writeFile(path.join(stateDir, name), `${name}\n`);
 	}
 	await writeFile(path.join(stateDir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
@@ -80,7 +80,7 @@ test("supervisor runs a bounded turn and records final metadata", async () => {
 test("DONE created during a turn terminates the supervisor before sleeping", async () => {
 	const stateDir = await mkdtemp(path.join(tmpdir(), "pi-resident-done-test-"));
 	await mkdir(path.join(stateDir, "sessions"));
-	for (const name of ["SYSTEM.md", "GOAL.md", "INBOX.md", "journal.md"]) {
+	for (const name of ["SYSTEM.md", "GOAL.md", "journal.md"]) {
 		await writeFile(path.join(stateDir, name), `${name}\n`);
 	}
 	await writeFile(path.join(stateDir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
@@ -107,4 +107,53 @@ test("DONE created during a turn terminates the supervisor before sleeping", asy
 	const metadata = JSON.parse(await readFile(path.join(stateDir, "resident.json"), "utf8"));
 	assert.equal(metadata.status, "done");
 	await rm(stateDir, { recursive: true, force: true });
+});
+
+test("RESET waits for the child and starts a fresh session immediately", async (t) => {
+	const stateDir = await mkdtemp(path.join(tmpdir(), "pi-resident-reset-test-"));
+	t.after(() => rm(stateDir, { recursive: true, force: true }));
+	await mkdir(path.join(stateDir, "sessions"));
+	await writeFile(path.join(stateDir, "sessions/old.jsonl"), "old context");
+	await writeFile(path.join(stateDir, "GOAL.md"), "keep working");
+	const fakePi = path.join(stateDir, "fake-pi.mjs");
+	await writeFile(fakePi, `
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+const dir = process.env.PI_RESIDENT_STATE_DIR;
+const turnFile = path.join(dir, 'turn-number');
+const turn = fs.existsSync(turnFile) ? 2 : 1;
+fs.writeFileSync(turnFile, String(turn));
+const session = process.argv[process.argv.indexOf('--session-id') + 1];
+fs.appendFileSync(path.join(dir, 'seen-sessions'), session + '\\n');
+if (turn === 1) {
+  fs.writeFileSync(path.join(dir, 'RESET'), 'requested');
+  await new Promise(resolve => setTimeout(resolve, 15));
+  if (!fs.existsSync(path.join(dir, 'sessions/old.jsonl'))) process.exit(3);
+  fs.writeFileSync(path.join(dir, 'journal.md'), 'written after reset request');
+  fs.writeFileSync(path.join(dir, 'DONE'), 'old task completion');
+} else {
+  fs.writeFileSync(path.join(dir, 'reset-observed.json'), JSON.stringify({
+    journal: fs.readFileSync(path.join(dir, 'journal.md'), 'utf8'),
+    oldSession: fs.existsSync(path.join(dir, 'sessions/old.jsonl')),
+    done: fs.existsSync(path.join(dir, 'DONE')),
+    goal: fs.readFileSync(path.join(dir, 'GOAL.md'), 'utf8')
+  }));
+  fs.writeFileSync(path.join(dir, 'DONE'), 'finished new session');
+}
+`);
+	const config = { ...exampleConfig(stateDir), intervalSeconds: 60, maxTurns: 2,
+		piInvocation: { command: process.execPath, prefixArgs: [fakePi] } };
+	const configPath = path.join(stateDir, "config.json");
+	await writeFile(configPath, JSON.stringify(config));
+	const result = await runResident(configPath);
+	assert.deepEqual(result, { status: "done", turn: 2 });
+	const sessions = (await readFile(path.join(stateDir, "seen-sessions"), "utf8")).trim().split("\n");
+	assert.equal(sessions[0], config.id);
+	assert.notEqual(sessions[1], sessions[0]);
+	const observed = JSON.parse(await readFile(path.join(stateDir, "reset-observed.json"), "utf8"));
+	assert.equal(observed.oldSession, false);
+	assert.equal(observed.done, false);
+	assert.equal(observed.goal, "keep working");
+	assert.doesNotMatch(observed.journal, /written after/);
+	assert.equal(JSON.parse(await readFile(path.join(stateDir, "resident.json"))).lastExitCode, 0);
 });

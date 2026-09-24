@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { enqueueMessage, requestControl, contextDescription } from "./control.mjs";
+
 const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "runner.mjs");
 const residentPrefix = "pi-resident-";
 
@@ -38,7 +40,7 @@ function isLive(resident) {
 }
 
 function describe(resident) {
-	return `${resident.id} pid=${resident.pid} live=${isLive(resident)} status=${resident.status} turn=${resident.turn} state=${resident.stateDir}`;
+	return `${resident.id} pid=${resident.pid} live=${isLive(resident)} status=${resident.status} turn=${resident.turn} state=${resident.stateDir} ${contextDescription(resident.stateDir)}`;
 }
 
 function main() {
@@ -60,10 +62,17 @@ function main() {
 		process.stdout.write(`stop requested for ${resident.id} (PID ${resident.pid})\n`);
 		return;
 	}
+	if (command === "reset" || command === "compact") {
+		if (!isLive(resident)) throw new Error("resident is not running; control commands do not restart stopped residents");
+		requestControl(resident.stateDir, command.toUpperCase());
+		process.kill(resident.pid, "SIGUSR1");
+		process.stdout.write(`${command} requested for ${resident.id}; applies between turns.\n`);
+		return;
+	}
 	if (command === "wake") {
 		const message = rest.join(" ").trim();
 		if (!message) throw new Error("wake requires a message");
-		fs.appendFileSync(path.join(resident.stateDir, "INBOX.md"), `\n## ${new Date().toISOString()}\n\n${message}\n`);
+		enqueueMessage(resident.stateDir, message);
 		if (isLive(resident)) process.kill(resident.pid, "SIGUSR1");
 		process.stdout.write(`message queued for ${resident.id} (PID ${resident.pid})\n`);
 		return;

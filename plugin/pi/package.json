@@ -16,7 +16,7 @@
     "pi-mcp-adapter": "2.35.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": ">=0.86.1"
   },
   "pi": {
     "extensions": [

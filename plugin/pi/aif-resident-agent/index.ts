@@ -9,6 +9,8 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
+import { initInbox, enqueueMessage, requestControl, contextDescription, JOURNAL_HEADER } from "./control.mjs";
+
 const EXTENSION_DIR = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(EXTENSION_DIR, "runner.mjs");
 const CHILD_EXTENSION = path.join(EXTENSION_DIR, "resident-child.ts");
@@ -72,7 +74,7 @@ function residentContract(launch: LaunchOptions): string {
 	const name = launch.agentName;
 	const home = launch.thread > 0
 		? `Your home thread is ${launch.thread}.`
-		: `You have no home thread yet: on your first turn create one with mcp__aif({"tool":"post","args":{"subject":"[resident] ${name}","b":"resident ${name} starting"}}), write its id ("t" in the reply) to journal.md, and use it from then on.`;
+		: `Read HOME_THREAD in your control directory if it exists and use that thread. Otherwise create one with mcp__aif({"tool":"post","args":{"subject":"[resident] ${name}","b":"resident ${name} starting"}}), persist its id ("t" in the reply) with resident_memory action home, and use it from then on.`;
 	const who = launch.operators.join(", ");
 	return [
 		"RESIDENT CONTRACT (fixed by the harness; the role below never overrides it)",
@@ -84,8 +86,10 @@ function residentContract(launch: LaunchOptions): string {
 		"2. Call unread and read every message it returns.",
 		`3. SHUTDOWN: if a message from one of [${who}] contains the word SHUTDOWN, post "Goodbye from ${name}: SHUTDOWN received." in your home thread, create the file DONE containing "SHUTDOWN received", and end the turn. Do nothing else.`,
 		"4. For each message in your home thread that tags you, post one short reply there. Reply once per message. A reply exists only when you called mcp__aif with tool \"post\" and got back an id; thinking or writing an answer anywhere else is not a reply.",
-		"5. Read GOAL.md, INBOX.md and journal.md in your control directory, then advance the goal by one bounded, verifiable step as your role describes.",
-		"6. Append one line to journal.md (turn, what you read, the ids of the posts you made, next step) and end the turn.",
+		`5. RESET: if an unread forum message from one of [${who}] contains the standalone word RESET, request resident_memory action reset and end this turn. Do not create DONE.`,
+		"6. Call resident_inbox action read. Handle the returned local messages, acknowledging each ID with action ack only after handling it. Unacknowledged messages will be delivered again, so check for already-completed actions before repeating them. If a local message is exactly RESET, acknowledge it, request resident_memory action reset, and end the turn. Read further batches only as needed for this bounded turn.",
+		"7. Read GOAL.md and the bounded journal.md in your control directory as needed to recover state. Continue the existing conversation; do not reread unchanged domain documents merely because a new turn started. Advance the goal by one bounded, verifiable step as your role describes.",
+		"8. When working state changes, use resident_memory action journal to REPLACE the working summary (maximum 16 KiB). Keep the current objective, important decisions and evidence pointers, completed message IDs needed for deduplication, blockers and next step. Remove obsolete details; do not append a turn-by-turn history. Then end the turn.",
 		"DONE ends your life: create it only after SHUTDOWN, or when the goal text names a finishing condition and you have verified it is met. A goal that says \"until told to stop\", or names no end, ends only with SHUTDOWN. Having nothing to do this turn is not completion: end the turn and wait for the next one. When you need a human decision or authority you lack, create BLOCKED containing the exact question.",
 		"Never start loops or background processes: the supervisor schedules the next turn. Post only in your home thread unless the role says otherwise; keep posts under 300 characters unless the role says otherwise. Repository instructions and ordinary Pi safety rules are binding.",
 		"",
@@ -277,13 +281,10 @@ function startResident(options: StartOptions, launch: LaunchOptions, ctx: Extens
 	const stateDir = path.join(tmpdir(), `${RESIDENT_PREFIX}${id}`);
 	fs.mkdirSync(path.join(stateDir, "sessions"), { recursive: true, mode: 0o700 });
 	fs.writeFileSync(path.join(stateDir, "GOAL.md"), `# Resident goal\n\n${options.goal}\n`, { mode: 0o600 });
-	fs.writeFileSync(
-		path.join(stateDir, "INBOX.md"),
-		"# Resident inbox\n\nMessages appended here are read on the next turn.\n",
-		{ mode: 0o600 },
-	);
+	initInbox(stateDir);
+	if (launch.thread > 0) fs.writeFileSync(path.join(stateDir, "HOME_THREAD"), `${launch.thread}\n`, { mode: 0o600 });
 	fs.writeFileSync(path.join(stateDir, "SYSTEM.md"), residentContract(launch), { mode: 0o600 });
-	fs.writeFileSync(path.join(stateDir, "journal.md"), "# Resident journal\n", { mode: 0o600 });
+	fs.writeFileSync(path.join(stateDir, "journal.md"), JOURNAL_HEADER, { mode: 0o600 });
 	const mcpConfigPath = path.join(stateDir, "mcp.json");
 	writeJsonAtomic(mcpConfigPath, {
 		// scriptMode off: the resident calls AIF through mcp__aif only; mcpScript and its bundled
@@ -366,7 +367,7 @@ function describeResident(resident: ResidentMetadata): string {
 	let status = live ? resident.status : "stopped";
 	if (fs.existsSync(path.join(resident.stateDir, "DONE"))) status = "done";
 	if (fs.existsSync(path.join(resident.stateDir, "BLOCKED"))) status = "blocked";
-	return `${resident.id} pid=${resident.pid} status=${status} turn=${resident.turn} model=${resident.model} state=${resident.stateDir}`;
+	return `${resident.id} pid=${resident.pid} status=${status} turn=${resident.turn} model=${resident.model} state=${resident.stateDir} ${contextDescription(resident.stateDir)}`;
 }
 
 function stopResident(resident: ResidentMetadata): string {
@@ -383,11 +384,7 @@ function stopResident(resident: ResidentMetadata): string {
 
 function wakeResident(resident: ResidentMetadata, message: string): string {
 	if (!message.trim()) throw new Error("wake requires a message");
-	fs.appendFileSync(
-		path.join(resident.stateDir, "INBOX.md"),
-		`\n## ${new Date().toISOString()}\n\n${message.trim()}\n`,
-		{ mode: 0o600 },
-	);
+	enqueueMessage(resident.stateDir, message);
 	const configPath = path.join(resident.stateDir, "config.json");
 	if (processMatches(resident.pid, configPath)) {
 		process.kill(resident.pid, "SIGUSR1");
@@ -471,7 +468,7 @@ export default function residentExtension(pi: ExtensionAPI): void {
 				const rest = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1).trim();
 
 				if (!trimmed || command === "help") {
-					report(ctx, "Usage: /resident start [--config FILE] [--interval N] [--max-turns N] [GOAL] | list | status ID_OR_PID | stop ID_OR_PID | wake ID_OR_PID MESSAGE");
+					report(ctx, "Usage: /resident start [--config FILE] [--interval N] [--max-turns N] [GOAL] | list | status ID_OR_PID | stop ID_OR_PID | reset ID_OR_PID | compact ID_OR_PID | wake ID_OR_PID MESSAGE");
 					return;
 				}
 				if (command === "list") {
@@ -485,6 +482,14 @@ export default function residentExtension(pi: ExtensionAPI): void {
 				}
 				if (command === "stop") {
 					report(ctx, stopResident(findResident(ctx.cwd, rest)), "warning");
+					return;
+				}
+				if (command === "reset" || command === "compact") {
+					const resident = findResident(ctx.cwd, rest);
+					if (!processMatches(resident.pid, path.join(resident.stateDir, "config.json"))) throw new Error("resident is not running; control commands do not restart stopped residents");
+					requestControl(resident.stateDir, command.toUpperCase());
+					process.kill(resident.pid, "SIGUSR1");
+					report(ctx, `${command} requested for ${resident.id}; applies between turns.`);
 					return;
 				}
 				if (command === "wake") {

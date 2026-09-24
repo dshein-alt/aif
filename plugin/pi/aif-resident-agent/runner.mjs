@@ -5,6 +5,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { applyReset, boundJournal, contextDescription } from "./control.mjs";
+
 export function writeJsonAtomic(file, value) {
 	const temporary = `${file}.${process.pid}.tmp`;
 	fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
@@ -27,7 +29,7 @@ export function buildPiArgs(config, turn) {
 		"--session-dir",
 		path.join(config.stateDir, "sessions"),
 		"--session-id",
-		config.id,
+		config.sessionId ?? config.id,
 		"--name",
 		`resident:${config.id}`,
 		"--provider",
@@ -45,8 +47,8 @@ export function buildPiArgs(config, turn) {
 		[
 			`Resident turn ${turn}.`,
 			`Your durable control directory is ${config.stateDir}.`,
-			"Run the resident contract's turn loop first (ping, unread, SHUTDOWN check, replies), then read GOAL.md, INBOX.md, and journal.md there and advance the goal by one bounded step.",
-			"Record what you verified and the next step in journal.md. Create DONE or BLOCKED as described by the resident system prompt when appropriate.",
+			"Run the resident contract's turn loop first (ping, unread, SHUTDOWN check, replies), then use resident_inbox to read and acknowledge local messages. Recover working state from GOAL.md and journal.md as needed and advance the goal by one bounded step.",
+			"When state changes, replace the bounded working summary using resident_memory action journal. Create DONE or BLOCKED as described by the resident system prompt when appropriate.",
 		].join(" "),
 	);
 	return args;
@@ -135,6 +137,18 @@ export async function runResident(configPath) {
 		throw new Error("resident child extension path must be absolute");
 	}
 
+	try { config.sessionId = JSON.parse(fs.readFileSync(path.join(config.stateDir, "session.json"), "utf8")).id; }
+	catch (error) { if (error.code !== "ENOENT") throw error; }
+	// Complete a reset interrupted by a supervisor crash before accepting more work.
+	if (fs.existsSync(path.join(config.stateDir, "RESET.processing")) && !fs.existsSync(path.join(config.stateDir, "RESET"))) {
+		fs.renameSync(path.join(config.stateDir, "RESET.processing"), path.join(config.stateDir, "RESET"));
+	}
+	const reset = () => {
+		if (!applyReset(config)) return false;
+		appendSupervisorLog(config, `reset session=${config.sessionId}`);
+		updateMetadata(config, { sessionId: config.sessionId, resetAt: new Date().toISOString() });
+		return true;
+	};
 	const state = { stopping: false, wakeRequested: false, resolveDelay: undefined };
 	const requestStop = () => {
 		state.stopping = true;
@@ -142,11 +156,13 @@ export async function runResident(configPath) {
 	};
 	process.on("SIGTERM", requestStop);
 	process.on("SIGINT", requestStop);
-	process.on("SIGHUP", () => undefined);
-	process.on("SIGUSR1", () => {
+	const ignoreHangup = () => undefined;
+	const requestWake = () => {
 		state.wakeRequested = true;
 		state.resolveDelay?.();
-	});
+	};
+	process.on("SIGHUP", ignoreHangup);
+	process.on("SIGUSR1", requestWake);
 
 	appendSupervisorLog(config, `started pid=${process.pid} model=${config.provider}/${config.model} thinking=${config.thinkingLevel} agent=${JSON.stringify(config.agentName)} interval=${config.intervalSeconds}s maxTurns=${config.maxTurns || "unlimited"}`);
 	updateMetadata(config, { pid: process.pid, status: "running", turn: 0 });
@@ -156,6 +172,7 @@ export async function runResident(configPath) {
 	try {
 		while (!state.stopping) {
 			if (fs.existsSync(path.join(config.stateDir, "STOP"))) break;
+			reset();
 			if (fs.existsSync(path.join(config.stateDir, "DONE"))) {
 				finalStatus = "done";
 				break;
@@ -173,7 +190,10 @@ export async function runResident(configPath) {
 			updateMetadata(config, { status: "working", turn });
 			const exitCode = await runTurn(config, turn);
 			updateMetadata(config, { status: exitCode === 0 ? "sleeping" : "retrying", turn, lastExitCode: exitCode });
-			if (state.stopping) break;
+			if (boundJournal(config.stateDir)) appendSupervisorLog(config, "journal exceeded 16 KiB; retained bounded recent notes");
+			appendSupervisorLog(config, contextDescription(config.stateDir));
+			if (state.stopping || fs.existsSync(path.join(config.stateDir, "STOP"))) break;
+			const wasReset = reset();
 			if (fs.existsSync(path.join(config.stateDir, "DONE"))) {
 				finalStatus = "done";
 				break;
@@ -186,9 +206,14 @@ export async function runResident(configPath) {
 				finalStatus = "turn-limit";
 				break;
 			}
+			if (wasReset) continue;
 			await makeWakeableDelay(config.intervalSeconds * 1000, state);
 		}
 	} finally {
+		process.off("SIGTERM", requestStop);
+		process.off("SIGINT", requestStop);
+		process.off("SIGHUP", ignoreHangup);
+		process.off("SIGUSR1", requestWake);
 		appendSupervisorLog(config, `exiting pid=${process.pid} status=${finalStatus} turn=${turn}`);
 		updateMetadata(config, { status: finalStatus, turn, stoppedAt: new Date().toISOString() });
 	}

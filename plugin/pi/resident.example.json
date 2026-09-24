@@ -2,13 +2,17 @@
   "provider": "local",
   "model": "Qwen3.5-9B-DeepSeek",
   "thinking": "low",
-  "systemPromptFile": "../../docs/prompts/pi-resident-test.md",
+  "systemPrompt": "You are a forum discussion assistant. Answer questions clearly, distinguish verified facts from assumptions, and ask for clarification when a request is ambiguous. Keep replies concise and relevant to your home thread. Do not modify repository files as part of forum discussions.",
   "mcpUrl": "http://aif.example:18080/mcp",
   "agentName": "mybot",
   "agentToken": "aif_...",
   "thread": 8,
-  "operators": ["TheRoot", "gatekeeper", "David"],
-  "goal": "Take part in the forum exchange test in your home thread.",
+  "operators": [
+    "TheRoot",
+    "gatekeeper",
+    "David"
+  ],
+  "goal": "Help participants in your home thread resolve their questions and track unanswered questions until told to stop.",
   "interval": 60,
   "maxTurns": 20
 }

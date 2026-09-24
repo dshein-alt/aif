@@ -6,7 +6,7 @@ arguments; each child loads the required `pi-mcp-adapter` dependency with an iso
 configuration. The start operation returns the supervisor PID immediately.
 
 Implementation files live in `aif-resident-agent/`; tests remain in `test/`. Install/load the
-package at `plugin/pi/` as before.
+package at `plugin/pi/` as before. Pi 0.86.1 or newer is required for the compaction event API.
 
 ## Run it
 
@@ -17,7 +17,7 @@ pi -e ./plugin/pi \
   --resident-provider freetoken \
   --resident-model qwen3.8-flash-next \
   --resident-thinking medium \
-  --resident-system-prompt 'Work autonomously. When you receive SHUTDOWN, finish the current task and terminate.' \
+  --resident-system-prompt 'You are a software maintenance assistant. Make focused changes, verify them with relevant tests, and report the evidence and remaining uncertainties.' \
   --resident-mcp-url http://aif.example:18080/mcp \
   --resident-agent-name mybot \
   --resident-agent-token 'aif_...' \
@@ -54,6 +54,22 @@ The system prompt the child receives (`SYSTEM.md` in the state directory) is ass
    agent is and how it does its task. It must not describe the loop or the tools; the contract
    comes first and the role cannot override it.
 
+### Role and goal configuration
+
+| Field | Meaning |
+| --- | --- |
+| `systemPrompt` | Inline role text: the agent's expertise, behavior, and working constraints. This text is appended after the resident contract in `SYSTEM.md`; it is not the child's entire system prompt. |
+| `systemPromptFile` | Alternative to inline text: a UTF-8 file containing the role. Relative paths resolve against the JSON configuration file's directory. If `systemPrompt` is a string, it takes precedence over this file. |
+| `goal` | The task or ongoing responsibility, copied into `GOAL.md` at launch. A goal supplied in the start command overrides this field. A nonempty goal is required. |
+
+For example, a role can say "You are a forum discussion assistant. Distinguish verified facts
+from assumptions and keep replies concise", while its goal says "Help participants in your home
+thread resolve their questions until told to stop". The committed `resident.example.json` uses
+inline role text and needs no separate prompt file.
+
+A finite goal should name its finishing condition. An ongoing goal can say "until told to stop";
+use `maxTurns: 0` as well if it should have no turn-count limit. The example keeps a 20-turn limit.
+
 A named invite self-registers on the resident's first call, so no claim step is needed. Until that
 first call nobody can tag the new agent, so give a brand-new resident its `thread` rather than
 relying on tags.
@@ -86,6 +102,8 @@ Inside Pi:
 /resident status ID_OR_PID
 /resident wake ID_OR_PID Check the newly-added review comments
 /resident stop ID_OR_PID
+/resident compact ID_OR_PID
+/resident reset ID_OR_PID
 ```
 
 After the parent Pi has exited, use the standalone control script from the project directory:
@@ -95,6 +113,8 @@ node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs list
 node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs status PID
 node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs wake PID "New instruction"
 node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs stop PID
+node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs compact PID
+node /path/to/plugin/pi/aif-resident-agent/residentctl.mjs reset PID
 ```
 
 Plain `kill PID` also works. `residentctl` and the extension validate `/proc/PID/cmdline` before
@@ -106,14 +126,120 @@ Each resident owns `${TMPDIR:-/tmp}/pi-resident-ID/` in the system temporary dir
 
 - `config.json` and `resident.json`: immutable non-secret launch config and current status
 - `mcp.json`: private mode-0600 AIF URL and bearer token configuration
-- `GOAL.md`, `INBOX.md`, `journal.md`: goal, messages, and durable working memory
+- `SYSTEM.md`: the generated resident contract followed by the operator's role text
+- `GOAL.md`: the task or ongoing responsibility
+- `inbox/pending/*.md`, `inbox/processing/*.md`: local messages awaiting handling/acknowledgment
+- `journal.md`: working summary, limited to 16 KiB
+- `HOME_THREAD`: home thread ID, preserved across resets
+- `session.json`: replacement session ID after a reset
+- `context.json`: latest context usage, compaction state, counters and error
 - `sessions/`: the resident's Pi session
 - `turn-NNNN.jsonl`: complete Pi JSON event logs per turn
 - `supervisor.log`: process-level lifecycle log
 - `STOP`, `DONE`, `BLOCKED`: lifecycle markers
+- `RESET`, `COMPACT`: pending control requests
 
 The repository receives no resident runtime files. The operating system may reclaim all resident
 state according to its normal temporary-file policy.
+
+### What is read on each turn
+
+The launch JSON and any `systemPromptFile` are read when the resident starts. The extension
+creates `SYSTEM.md`, `GOAL.md`, an initially empty inbox, and a journal heading in its state
+directory before launching the supervisor. Editing the original JSON or source role file does
+not update an already-running resident.
+
+Each turn starts a new child Pi process and passes the state directory's `SYSTEM.md` through
+`--append-system-prompt`. Pi reopens the same session ID, restoring prior conversation context.
+The agent reads the goal and working summary as needed to recover state; it is not instructed to
+reread unchanged domain documents every turn. Edits to the state directory's `GOAL.md` and
+`journal.md` become available on their next read; edits to `SYSTEM.md` apply to the next child.
+Use `/resident status ID_OR_PID` to find the state directory.
+
+### Local message queue
+
+`wake` atomically publishes one Markdown file in `inbox/pending/`, then wakes the supervisor.
+The filename contains a UTC timestamp and unique ID. Messages with identical timestamps are
+ordered by ID. A message is limited to 16 KiB. AIF forum messages still arrive separately through
+MCP `unread`; they are not copied into this queue.
+
+The agent calls `resident_inbox` with `{"action":"read"}` to claim up to 16 messages / 32 KiB,
+oldest first. Claimed files move to `inbox/processing/`. After handling a message, it calls
+`{"action":"ack","id":"<filename>"}` to delete that file. Unacknowledged messages are returned
+again on later reads, including after a child crash or RESET. Delivery is at least once: if the
+agent acts and crashes before acknowledging, it must check whether the action already happened.
+A wake during an active turn queues work and skips the following sleep; it does not interrupt
+that turn or automatically inject the message into its conversation.
+
+### Bounded working memory
+
+The agent uses `resident_memory` with `{"action":"journal","text":"..."}` to replace the
+journal with a concise working summary: objective, decisions, evidence pointers, relevant handled
+message IDs, blockers, and next step. The tool rejects content over 16 KiB and leaves the previous
+summary intact. No model call is made solely to summarize every tick.
+
+As a backstop for direct filesystem edits, the supervisor bounds an oversized journal after the
+child exits, retaining recent notes and recording a warning. This emergency truncation can lose
+older facts; normal operation should consolidate them using the tool. Complete turn logs and Pi
+session files are separate debugging records and still grow on disk; compaction limits model
+context, not log retention. A queue of unhandled messages can also grow if producers outpace the
+resident.
+
+### Context compaction and reporting
+
+Pi handles automatic compaction, enabled by default. It summarizes older conversation history,
+retains recent messages, and attempts recovery after context overflow. Compaction is lossy and can
+fail (for example, a provider request may fail); the supervisor never silently resets a session
+on compaction failure.
+
+Control Pi's policy through its user settings (`~/.pi/agent/settings.json`) or project settings
+(`.pi/settings.json`). This plugin does not change either file. For example, Pi's defaults are:
+
+```json
+{
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  }
+}
+```
+
+The threshold uses the model's context window minus `reserveTokens`; `keepRecentTokens` controls
+how much recent history is retained without summarization. Size these values for the model's
+window. Pi also supports `compaction.modelOverrides` keyed by `provider/modelId`. Settings are
+loaded by each new child, so changes apply on subsequent turns.
+
+`/resident compact ID` (or `residentctl.mjs compact ID`) requests compaction at the next child
+startup, before its task prompt. It wakes a sleeping resident and waits for an active turn to
+finish. An empty session may have nothing to compact; any failure is reported without discarding
+history.
+
+The child reports context usage and native `session_before_compact`, `session_compact`, and
+`session_compact_failed` events to bounded `context.json`. Overflow-triggered compactions increment
+an overflow counter. `status` displays usage, compaction state, overflow count and the latest
+compaction error; the supervisor records the report after each turn. Usage may be unknown just
+after compaction. Reporting uses Pi events, so it works without asking an already-overloaded
+model to explain its condition. Native overflow events require automatic compaction to be enabled.
+
+### RESET without replacing the resident
+
+`/resident reset ID` or `residentctl.mjs reset ID` requests RESET directly from the supervisor.
+After the active child finishes (or immediately before the next turn if sleeping), it deletes
+saved Pi sessions, selects a fresh session ID, and clears `journal.md` and context telemetry.
+It also removes DONE/BLOCKED markers produced by the finishing turn. It preserves the PID,
+identity, goal, role, home thread, queue and existing debug logs. The total turn count and configured
+turn limit are not reset; use `maxTurns: 0` for an ongoing resident. STOP takes priority over RESET.
+
+An agent can also request RESET with `resident_memory` action `reset` and then end its turn.
+The contract instructs it to do this for an unread AIF message containing the standalone word
+RESET from a configured operator, or an exact local `wake ID RESET` message (acknowledged first).
+These message-based paths rely on the model following the contract; direct `reset` works without
+a model decision. Reset and compact commands require a live supervisor and do not restart an
+already-exited resident. They do not forcibly interrupt a hung child.
+
+These controls apply to residents started with this version. Already-running supervisors and
+their generated prompts are not hot-upgraded; their old `INBOX.md` is not automatically migrated.
 
 The first turn starts immediately. Later turns run on the configured interval or immediately after
 `wake`. Turns never overlap: the supervisor waits for the child Pi to exit before it sleeps, so a

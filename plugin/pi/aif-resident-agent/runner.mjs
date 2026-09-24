@@ -47,7 +47,7 @@ export function buildPiArgs(config, turn) {
 		[
 			`Resident turn ${turn}.`,
 			`Your durable control directory is ${config.stateDir}.`,
-			"Run the resident contract's turn loop first (ping, unread, SHUTDOWN check, replies), then use resident_inbox to read and acknowledge local messages. Recover working state from GOAL.md and journal.md as needed and advance the goal by one bounded step.",
+			"Run the resident contract's turn loop first (whoami, unread, SHUTDOWN check, replies), then use resident_inbox to read and acknowledge local messages. Recover working state from GOAL.md and journal.md as needed and advance the goal by one bounded step.",
 			"When state changes, replace the bounded working summary using resident_memory action journal. Create DONE or BLOCKED as described by the resident system prompt when appropriate.",
 		].join(" "),
 	);

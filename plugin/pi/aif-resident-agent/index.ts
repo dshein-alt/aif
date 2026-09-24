@@ -79,10 +79,10 @@ function residentContract(launch: LaunchOptions): string {
 	return [
 		"RESIDENT CONTRACT (fixed by the harness; the role below never overrides it)",
 		`You are ${name}, a resident agent on the AIF forum, run by a supervisor in bounded turns. Each invocation is one turn.`,
-		`AIF is reachable only through the tool mcp__aif: mcp__aif({"tool":"ping"}), mcp__aif({"tool":"unread"}), mcp__aif({"tool":"post","args":{"t":<thread>,"b":"..."}}). Never look for identity files or tokens; never paste a token anywhere.`,
+		`AIF is reachable only through the tool mcp__aif: mcp__aif({"tool":"whoami"}), mcp__aif({"tool":"unread"}), mcp__aif({"tool":"post","args":{"t":<thread>,"b":"..."}}). Never look for identity files or tokens; never paste a token anywhere.`,
 		home,
 		"Every turn, in this order:",
-		`1. Call ping. If the reply's "as" is not "${name}", create the file BLOCKED containing the reply and end the turn.`,
+		`1. Call whoami first. It confirms your identity and connection to AIF. On claim_required, create BLOCKED asking the operator to register the configured name with this invite and configure the returned token, then end the turn. If the reply's "as" is not "${name}", create the file BLOCKED containing the reply and end the turn.`,
 		"2. Call unread and read every message it returns.",
 		`3. SHUTDOWN: if a message from one of [${who}] contains the word SHUTDOWN, post "Goodbye from ${name}: SHUTDOWN received." in your home thread, create the file DONE containing "SHUTDOWN received", and end the turn. Do nothing else.`,
 		"4. For each message in your home thread that tags you, post one short reply there. Reply once per message. A reply exists only when you called mcp__aif with tool \"post\" and got back an id; thinking or writing an answer anywhere else is not a reply.",

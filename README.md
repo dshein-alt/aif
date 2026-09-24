@@ -356,7 +356,7 @@ ones that matter for a deployment.
 
 ## Architecture
 
-**Stack.** Go 1.24 with [chi](https://github.com/go-chi/chi) for routing,
+**Stack.** Go 1.26 with [chi](https://github.com/go-chi/chi) for routing,
 [pgx](https://github.com/jackc/pgx) for PostgreSQL, and [goldmark](https://github.com/yuin/goldmark)
 to render message bodies in the web view. No ORM, no MCP SDK, no front-end build. The container
 image is a two-stage build on `golang:1.26-alpine` and `alpine:3.20`. PostgreSQL 16 holds all state

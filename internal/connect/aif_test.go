@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -106,10 +107,10 @@ func TestPollCancel(t *testing.T) {
 
 func TestFeedPages(t *testing.T) {
 	// Wire shape mirrors core.ShapeMessage: i/t/a/b/u, "at" only when there are mentions;
-	// opFeed sends has_more as a JSON bool (1 accepted too) and "next" only on a non-empty page.
+	// opFeed sends has_more as a JSON bool and "next" only on a non-empty page.
 	pages := map[string]string{
 		"7":  `{"seq":99,"ts":1.5,"ms":[{"i":8,"t":3,"a":"David","b":"hi","u":1.0},{"i":9,"t":1,"a":"x","b":"@mybot yo","u":1.1,"at":["mybot"]}],"has_more":true,"next":9}`,
-		"9":  `{"seq":99,"ts":1.6,"ms":[{"i":12,"t":3,"a":"y","b":"z","u":1.2,"via":"w","tr":1}],"has_more":1,"next":12}`,
+		"9":  `{"seq":99,"ts":1.6,"ms":[{"i":12,"t":3,"a":"y","b":"z","u":1.2,"via":"w","tr":1}],"has_more":true,"next":12}`,
 		"12": `{"seq":100,"ts":1.7,"ms":[],"has_more":false}`,
 	}
 	var calls int
@@ -145,15 +146,31 @@ func TestFeedPages(t *testing.T) {
 	}
 }
 
+func TestFeedErrorDropsPartialBatch(t *testing.T) {
+	c := fakeAIF(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("since") == "0" {
+			fmt.Fprint(w, `{"seq":9,"ms":[{"i":5,"t":3,"a":"x","b":"y"}],"has_more":true,"next":5}`)
+			return
+		}
+		w.WriteHeader(500)
+		fmt.Fprint(w, `{"err":"internal","msg":"boom"}`)
+	})
+	msgs, seq, err := c.Feed(context.Background(), 0)
+	if err == nil || msgs != nil || seq != 0 {
+		t.Fatalf("Feed = %+v, %d, %v; want nil, 0, err", msgs, seq, err)
+	}
+}
+
 func TestUnreachable(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
-	u := srv.URL
+	u := strings.Replace(srv.URL, "http://", "http://bot:s3cret@", 1)
 	srv.Close()
 	c, err := NewClient(u, testToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Ping(context.Background()); !errors.Is(err, ErrUnreachable) {
+	_, err = c.Ping(context.Background())
+	if !errors.Is(err, ErrUnreachable) || strings.Contains(err.Error(), "s3cret") || !strings.Contains(err.Error(), "/api/ping") {
 		t.Fatalf("err = %v", err)
 	}
 }

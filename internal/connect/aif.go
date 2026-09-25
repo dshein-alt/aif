@@ -88,24 +88,23 @@ func (c *Client) Poll(ctx context.Context, wait int) (n int, seq int64, err erro
 }
 
 // Feed returns every visible message with id above since, following has_more/next across
-// pages, and the last reply's seq.
+// pages, and the last reply's seq. On any error it returns nil, 0, err: never a partial batch.
 func (c *Client) Feed(ctx context.Context, since int64) ([]Message, int64, error) {
 	var all []Message
 	for {
 		var r struct {
-			Ms      []Message       `json:"ms"`
-			HasMore json.RawMessage `json:"has_more"` // true today; 1 accepted too
-			Next    int64           `json:"next"`
-			Seq     int64           `json:"seq"`
+			Ms      []Message `json:"ms"`
+			HasMore bool      `json:"has_more"`
+			Next    int64     `json:"next"`
+			Seq     int64     `json:"seq"`
 		}
 		q := url.Values{"since": {strconv.FormatInt(since, 10)}, "limit": {"500"}, "max_body": {"1000000"},
 			"threads": {"0"}, "on": {"0"}, "men": {"0"}}
 		if err := c.get(ctx, "/api/feed", q, &r); err != nil {
-			return all, 0, err
+			return nil, 0, err
 		}
 		all = append(all, r.Ms...)
-		more := string(r.HasMore) == "true" || string(r.HasMore) == "1"
-		if !more || r.Next <= since { // the guard stops a server that would page forever
+		if !r.HasMore || r.Next <= since { // the guard stops a server that would page forever
 			return all, r.Seq, nil
 		}
 		since = r.Next
@@ -114,6 +113,7 @@ func (c *Client) Feed(ctx context.Context, since int64) ([]Message, int64, error
 
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
 	u := c.base.JoinPath(path)
+	where := u.Redacted() // <host><path>, password masked: error strings never carry userinfo
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -125,7 +125,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("%w: %s: %w", ErrUnreachable, c.base, err)
+		return fmt.Errorf("%w: %s: %w", ErrUnreachable, where, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
@@ -133,7 +133,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("%w: %s: %w", ErrUnreachable, c.base, err)
+		return fmt.Errorf("%w: %s: %w", ErrUnreachable, where, err)
 	}
 	if resp.StatusCode/100 != 2 {
 		var e struct {
@@ -149,7 +149,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		return &APIError{Status: resp.StatusCode, Code: e.Err, Msg: e.Msg}
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("%s %s: bad reply: %w", path, c.base, err)
+		return fmt.Errorf("%s: bad reply: %w", where, err)
 	}
 	return nil
 }

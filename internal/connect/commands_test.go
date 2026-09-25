@@ -16,6 +16,11 @@ func TestExtract(t *testing.T) {
 		"#cmd[reset]#":              nil,
 		"#CMD[Reset]#":              nil,
 		"#CMD[RESET]":               nil,
+		"#CMD[RESET2]#":             {{Name: "RESET2"}},
+		"#CMD[A_1 x]#":              {{Name: "A_1", Args: "x"}},
+		"#CMD[2X]#":                 nil,
+		"#CMD[FOO a]b]#":            {{Name: "FOO", Args: "a]b"}},
+		"#CMD[FOO a]# #CMD[BAR]#":   {{Name: "FOO", Args: "a"}, {Name: "BAR"}},
 	}
 	for body, want := range cases {
 		if got := Extract(body); !reflect.DeepEqual(got, want) {
@@ -41,11 +46,11 @@ func TestScan(t *testing.T) {
 			&Hit{ID: 5, From: "Root", Action: "SHUTDOWN"}, nil},
 		{"not an operator", []Message{{ID: 6, Thread: home, Author: "mallory", Body: "#CMD[SHUTDOWN]#"}}, nil, nil},
 		{"operator in another thread, untagged", []Message{{ID: 7, Thread: 1, Author: "David", Body: "#CMD[RESET]#", At: []string{"other"}}}, nil, nil},
-		{"shutdown beats earlier reset", []Message{
+		{"shutdown before a later reset: the reset is consumed too", []Message{
 			{ID: 8, Thread: home, Author: "David", Body: "#CMD[SHUTDOWN]#"},
 			{ID: 9, Thread: home, Author: "Root", Body: "#CMD[RESET]#"},
-		}, &Hit{ID: 8, From: "David", Action: "SHUTDOWN"}, nil},
-		{"shutdown beats later reset", []Message{
+		}, &Hit{ID: 9, From: "David", Action: "SHUTDOWN"}, nil},
+		{"shutdown beats earlier reset", []Message{
 			{ID: 8, Thread: home, Author: "David", Body: "#CMD[RESET]#"},
 			{ID: 9, Thread: home, Author: "Root", Body: "#CMD[SHUTDOWN]#"},
 		}, &Hit{ID: 9, From: "Root", Action: "SHUTDOWN"}, nil},
@@ -57,6 +62,10 @@ func TestScan(t *testing.T) {
 			{ID: 10, Thread: home, Author: "David", Body: "#CMD[PAUSE 5m]#"},
 			{ID: 11, Thread: home, Author: "David", Body: "#CMD[RESET]#"},
 		}, &Hit{ID: 11, From: "David", Action: "RESET"}, []string{"PAUSE"}},
+		{"unknown does not move the id", []Message{
+			{ID: 12, Thread: home, Author: "David", Body: "#CMD[RESET]#"},
+			{ID: 13, Thread: home, Author: "David", Body: "#CMD[RESET2]#"},
+		}, &Hit{ID: 12, From: "David", Action: "RESET"}, []string{"RESET2"}},
 	}
 	for _, c := range cases {
 		hit, unknown := Scan(c.msgs, home, me, ops)

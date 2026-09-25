@@ -1,9 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"flag"
+	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,6 +19,7 @@ import (
 	"time"
 
 	"github.com/dshein-alt/aif/internal/connect"
+	"github.com/dshein-alt/aif/internal/version"
 )
 
 // sockDir is a short temp directory: t.TempDir() embeds the test name and can push a socket path
@@ -44,6 +52,15 @@ func TestHelperProcess(t *testing.T) {
 	switch mode {
 	case "exit2":
 		os.Exit(2)
+	case "hang": // never ready; a SIGTERM (the default action) ends it early
+		time.Sleep(30 * time.Second)
+		os.Exit(6)
+	case "sigint": // the foreground connector's signal wiring, then deaf to the context
+		ctx, _ := stopContext(func(s string) { fmt.Fprintln(os.Stderr, s) })
+		fmt.Println("ready")
+		<-ctx.Done()
+		time.Sleep(30 * time.Second)
+		os.Exit(5)
 	case "exit3": // outlive a few polls of somebody else's socket, then fail as a second connector does
 		time.Sleep(time.Second)
 		os.Exit(3)
@@ -77,6 +94,12 @@ func TestHelperProcess(t *testing.T) {
 
 func daemonTest(t *testing.T, mode, dir string) (int, string) {
 	t.Helper()
+	code, out, _ := daemonLimit(t, mode, dir, 20*time.Second)
+	return code, out
+}
+
+func daemonLimit(t *testing.T, mode, dir string, limit time.Duration) (code int, stdout, stderr string) {
+	t.Helper()
 	t.Setenv("AIF_CONNECT_HELPER", mode)
 	t.Setenv("AIF_CONNECT_HELPER_DIR", dir)
 	errf, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
@@ -85,13 +108,17 @@ func daemonTest(t *testing.T, mode, dir string) (int, string) {
 	}
 	defer errf.Close()
 	var out bytes.Buffer
-	code := daemonize(os.Args[0], []string{"-test.run=^TestHelperProcess$"}, dir, 20*time.Second, &out, errf)
-	return code, out.String()
+	code = daemonize(os.Args[0], []string{"-test.run=^TestHelperProcess$"}, dir, limit, &out, errf)
+	b, err := os.ReadFile(errf.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code, out.String(), string(b)
 }
 
 func TestVersion(t *testing.T) {
 	code, out, _ := call(t, noEnv, "", "--version")
-	if code != 0 || out != "aif-connect 0.3.0 (dev)\n" {
+	if code != 0 || out != "aif-connect "+version.Version+" (dev)\n" {
 		t.Fatalf("code %d, out %q", code, out)
 	}
 }
@@ -101,7 +128,8 @@ func TestUsageErrors(t *testing.T) {
 	for _, args := range [][]string{
 		{"--bogus"}, {}, {"--to=x"}, {"frob"}, {"--config=x.json", "status"}, {"--daemon", "list"},
 		{"list", "x"}, {"--to=x", "list"}, {"status", "x"}, {"wake"}, {"wake", "a", "b"},
-		{"note"}, {"note", "get"}, {"note", "set"}, {"note", "list", "x"}, {"note", "frob", "x"},
+		{"note"}, {"note", "get"}, {"note", "set"}, {"note", "set", "x"}, {"note", "list", "x"}, {"note", "frob", "x"},
+		{"status", "--to=x"}, {"note", "get", "-to", "x"},
 	} {
 		code, _, errs := call(t, noEnv, "", args...)
 		if code != 1 || !strings.Contains(errs, "usage:") {
@@ -169,7 +197,10 @@ func TestNote(t *testing.T) {
 		out   string
 	}{
 		{"", []string{"note", "set", "plan", "step one\nstep two"}, 0, ""},
-		{"from stdin\n", []string{"note", "set", "log"}, 0, ""},
+		{"from stdin\n", []string{"note", "set", "log", "-"}, 0, ""},
+		{"", []string{"note", "set", "log", "-"}, 1, ""},                                   // would blank it
+		{strings.Repeat("x", 16<<10) + "\n\n", []string{"note", "set", "log", "-"}, 1, ""}, // over the limit
+		{"", []string{"note", "get", "log"}, 0, "from stdin\n"},
 		{"", []string{"note", "get", "plan"}, 0, "step one\nstep two\n"},
 		{"", []string{"note", "list"}, 0, "log\tfrom stdin\nplan\tstep one\n"},
 		{"", []string{"note", "delete", "plan"}, 0, ""},
@@ -234,5 +265,125 @@ func TestControlVerbs(t *testing.T) {
 	defer mu.Unlock()
 	if len(got) != 1 || got[0].Text != "hello" {
 		t.Fatalf("wake requests %+v", got)
+	}
+}
+
+// note set ID - reads at most maxStdinNote bytes, so a longer input still arrives over the limit.
+func TestNoteSetFromStdinLimit(t *testing.T) {
+	var mu sync.Mutex
+	var got string
+	dir := sockDir(t)
+	srv, err := connect.Serve(dir, nil, func(r connect.Request) connect.Response {
+		mu.Lock()
+		got = r.Note
+		mu.Unlock()
+		return connect.Response{OK: true}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	env := func(k string) string {
+		if k == "AIF_CONNECT_STATE" {
+			return dir
+		}
+		return ""
+	}
+	full := strings.Repeat("x", 16<<10)
+	for _, c := range []struct{ stdin, want string }{
+		{full + "\n", full},
+		{full + "xyz", full + "xy"},
+	} {
+		code, _, errs := call(t, env, c.stdin, "note", "set", "big", "-")
+		mu.Lock()
+		if code != 0 || got != c.want {
+			t.Errorf("stdin of %d bytes: code %d, sent %d bytes, stderr %q", len(c.stdin), code, len(got), errs)
+		}
+		mu.Unlock()
+	}
+}
+
+func TestChildArgs(t *testing.T) {
+	fs := flag.NewFlagSet("x", flag.ContinueOnError)
+	fs.String("config", "", "")
+	fs.String("bin", "", "")
+	fs.Bool("daemon", false, "")
+	fs.Bool("verbose", false, "")
+	if err := fs.Parse([]string{"--daemon", "--config=/c.json", "--verbose", "--bin", "a b"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := childArgs(fs), []string{"--bin=a b", "--config=/c.json", "--verbose=true"}; !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestDaemonTimeoutStopsChild(t *testing.T) {
+	start := time.Now()
+	code, out, errs := daemonLimit(t, "hang", sockDir(t), time.Second)
+	if code != 1 || out != "" || !strings.Contains(errs, "did not become ready within 1s; stopped it; see its stderr above") {
+		t.Fatalf("code %d, out %q, stderr %q", code, out, errs)
+	}
+	if d := time.Since(start); d > 15*time.Second { // the child sleeps 30 s unless it was stopped
+		t.Fatalf("took %v: the child was not stopped", d)
+	}
+}
+
+// The first Ctrl-C cancels the context; the second ends the process by the default action even
+// though nothing honors the context.
+func TestSecondInterruptForces(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no SIGINT to send on Windows")
+	}
+	if signal.Ignored(os.Interrupt) { // inherited: once stopped, the child would ignore it again
+		t.Skip("SIGINT is ignored here (a background job?)")
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$")
+	cmd.Env = append(os.Environ(), "AIF_CONNECT_HELPER=sigint")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	waitFor := func(r *bufio.Scanner, line string) {
+		t.Helper()
+		for r.Scan() {
+			if strings.Contains(r.Text(), line) {
+				return
+			}
+		}
+		t.Fatalf("never saw %q", line)
+	}
+	waitFor(bufio.NewScanner(stdout), "ready")
+	start := time.Now()
+	cmd.Process.Signal(os.Interrupt)
+	waitFor(bufio.NewScanner(stderr), "stopping; Ctrl-C again to force")
+	cmd.Process.Signal(os.Interrupt)
+	cmd.Wait()
+	if code := cmd.ProcessState.ExitCode(); code != -1 || time.Since(start) > 15*time.Second {
+		t.Fatalf("exit %d after %v; want killed by the second SIGINT at once", code, time.Since(start))
+	}
+}
+
+// A relative bin path in the config resolves against the config's directory, --bin against the
+// current one.
+func TestBinResolution(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.json")
+	body := `{"agent":"pi","goal":"g","aifUrl":"http://h:1","agentName":"b","agentToken":"aif_x","thread":8,"bin":"sub/nope"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, errs := call(t, noEnv, "", "--config="+path); !strings.Contains(errs, filepath.Join(dir, "sub", "nope")) {
+		t.Fatalf("config bin: stderr %q", errs)
+	}
+	if _, _, errs := call(t, noEnv, "", "--config="+path, "--bin=sub/nope"); strings.Contains(errs, dir) || !strings.Contains(errs, "sub/nope") {
+		t.Fatalf("--bin: stderr %q", errs)
 	}
 }

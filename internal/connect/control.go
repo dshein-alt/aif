@@ -18,7 +18,7 @@ import (
 const (
 	callTimeout  = 10 * time.Second // one control exchange, both sides
 	readTimeout  = 2 * time.Second  // the server's wait for the request line
-	probeTimeout = 2 * time.Second  // List's status probe of each socket
+	probeTimeout = 2 * time.Second  // a status probe: Probe, and List for each socket
 	maxRequest   = 1 << 20          // a 16 KiB wake or note, JSON-escaped, fits with room to spare
 	// maxSockPath is the longest Unix socket path that binds everywhere: sun_path is 104 bytes on
 	// darwin (108 on linux), one of them the terminating NUL.
@@ -165,6 +165,20 @@ func (n *Notes) handle(r Request) Response {
 // Call sends one request to the connector whose state directory is dir and returns its reply.
 func Call(dir string, req Request) (Response, error) {
 	return exchange(dir, req, callTimeout)
+}
+
+// Probe asks the connector whose state directory is dir for its status, all within probeTimeout.
+func Probe(dir string) (Status, error) {
+	r, err := exchange(dir, Request{Op: "status"}, probeTimeout)
+	switch {
+	case err != nil:
+		return Status{}, err
+	case !r.OK:
+		return Status{}, errors.New(r.Error)
+	case r.Status == nil:
+		return Status{}, errors.New("status reply without a status")
+	}
+	return *r.Status, nil
 }
 
 // exchange is Call with the whole exchange, dial included, bounded by timeout.

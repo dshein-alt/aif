@@ -13,3 +13,6 @@ func detached() *syscall.SysProcAttr {
 	const detachedProcess = 0x00000008 // DETACHED_PROCESS; package syscall does not name it
 	return &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | detachedProcess}
 }
+
+// terminate ends the daemon child: Windows has no SIGTERM to send it.
+func terminate(p *os.Process) error { return p.Kill() }

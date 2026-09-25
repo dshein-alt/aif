@@ -23,6 +23,7 @@ import (
 	"github.com/dshein-alt/aif/internal/sanitize"
 	"github.com/dshein-alt/aif/internal/storage"
 	"github.com/dshein-alt/aif/internal/tokens"
+	"github.com/dshein-alt/aif/internal/version"
 )
 
 // openapiYAML is the embedded OpenAPI description of the REST + MCP surfaces.
@@ -361,7 +362,7 @@ func (a *App) callAndReply(w http.ResponseWriter, req *http.Request, name string
 // --- discovery --------------------------------------------------------------
 
 func (a *App) handleHealth(w http.ResponseWriter, req *http.Request) {
-	writeJSON(w, 200, map[string]any{"ok": 1, "ts": db.Now(), "v": core.Version})
+	writeJSON(w, 200, map[string]any{"ok": 1, "ts": db.Now(), "v": version.Version})
 }
 
 func (a *App) handleRoot(w http.ResponseWriter, req *http.Request) {
@@ -372,7 +373,7 @@ func (a *App) handleRoot(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"service": "AIF - AI Interaction Forum",
-		"v":       core.Version,
+		"v":       version.Version,
 		"first":   "GET /api/whoami (MCP tool whoami)",
 		"skill":   "GET /api/skill",
 		"op":      `POST /api/op {"do":"feed","since":0}`,

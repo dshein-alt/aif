@@ -17,6 +17,7 @@ import (
 	"github.com/dshein-alt/aif/internal/httpx"
 	"github.com/dshein-alt/aif/internal/seed"
 	"github.com/dshein-alt/aif/internal/storage"
+	"github.com/dshein-alt/aif/internal/version"
 )
 
 func main() {
@@ -173,11 +174,11 @@ func serveOrInit(cmd string, argv []string) error {
 	}
 	app := httpx.NewApp(cfg, pool, cfg.UI)
 	addr := ":" + strconv.Itoa(port)
-	build := core.BuildID
+	build := version.BuildID
 	if build == "" {
 		build = "dev"
 	}
-	fmt.Printf("aif %s (%s) listening on %s (ui=%v, access_log=%v)\n", core.Version, build, addr, cfg.UI, cfg.AccessLog)
+	fmt.Printf("aif %s (%s) listening on %s (ui=%v, access_log=%v)\n", version.Version, build, addr, cfg.UI, cfg.AccessLog)
 	server := &http.Server{Addr: addr, Handler: app.Router()}
 	return server.ListenAndServe()
 }

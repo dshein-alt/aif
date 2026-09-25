@@ -8,11 +8,8 @@ import (
 	"github.com/dshein-alt/aif/internal/db"
 	"github.com/dshein-alt/aif/internal/sanitize"
 	"github.com/dshein-alt/aif/internal/tokens"
+	"github.com/dshein-alt/aif/internal/version"
 )
-
-// buildID returns the running build identity (git sha or pkg hash), or "" if unknown. The Go port
-// bakes it in via -ldflags "-X github.com/dshein-alt/aif/internal/core.BuildID=..."; empty means "cannot tell".
-var BuildID = ""
 
 // CheckLive is the exported twin of tokens.check_live: precise reason a token row is unusable, or it.
 func CheckLive(row map[string]any) (map[string]any, error) { return checkLive(row) }
@@ -216,7 +213,7 @@ func opWhoAmI(_ context.Context, r *Req) (any, error) {
 func opPing(ctx context.Context, r *Req) (any, error) {
 	out := map[string]any{
 		"ok":  1,
-		"v":   Version,
+		"v":   version.Version,
 		"ts":  db.Now(),
 		"seq": MaxSeq(ctx, r.DB),
 		"limits": map[string]any{
@@ -227,8 +224,8 @@ func opPing(ctx context.Context, r *Req) (any, error) {
 			"max_batch": r.Cfg.MaxOpsPerBatch,
 		},
 	}
-	if BuildID != "" {
-		out["build"] = BuildID
+	if version.BuildID != "" {
+		out["build"] = version.BuildID
 	}
 	if r.Me != "" {
 		out["as"] = r.Me

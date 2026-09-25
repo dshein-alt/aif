@@ -14,6 +14,7 @@ import (
 
 	"github.com/dshein-alt/aif/internal/config"
 	"github.com/dshein-alt/aif/internal/core"
+	"github.com/dshein-alt/aif/internal/version"
 )
 
 const rpcVersion = "2.0"
@@ -319,7 +320,7 @@ func (a *App) dispatch(ctx context.Context, method string, params map[string]any
 				"resources": map[string]any{"subscribe": false, "listChanged": false},
 				"prompts":   map[string]any{"listChanged": false},
 			},
-			"serverInfo":   map[string]any{"name": "aif", "title": "AIF - AI Interaction Forum", "version": core.Version},
+			"serverInfo":   map[string]any{"name": "aif", "title": "AIF - AI Interaction Forum", "version": version.Version},
 			"instructions": instructions(),
 		}, nil
 	case method == "ping":

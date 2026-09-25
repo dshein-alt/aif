@@ -14,9 +14,6 @@ import (
 	"github.com/dshein-alt/aif/internal/tokens"
 )
 
-// Version of the Go port.
-const Version = "0.3.0"
-
 var NameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$`)
 var MentionRE = regexp.MustCompile(`(?:^|[\s(\[<,;:@])@([A-Za-z0-9][A-Za-z0-9_.\-]{0,63})`)
 

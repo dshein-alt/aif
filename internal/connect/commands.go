@@ -47,7 +47,10 @@ func Scan(msgs []Message, thread int64, agentName string, isOperator func(string
 		if !isOperator(m.Author) {
 			continue
 		}
-		if m.Thread != thread && !slices.ContainsFunc(m.At, func(a string) bool { return strings.EqualFold(a, agentName) }) {
+		// Mine when it tags me, or when it sits in my home thread and tags nobody (a broadcast).
+		// A command tagging someone else is theirs: several residents may share one thread.
+		tagsMe := slices.ContainsFunc(m.At, func(a string) bool { return strings.EqualFold(a, agentName) })
+		if !tagsMe && (m.Thread != thread || len(m.At) > 0) {
 			continue
 		}
 		for _, c := range Extract(m.Body) {

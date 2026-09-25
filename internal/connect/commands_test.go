@@ -127,6 +127,8 @@ func TestScan(t *testing.T) {
 			&Hit{ID: 5, From: "Root", Action: "SHUTDOWN"}, nil},
 		{"not an operator", []Message{{ID: 6, Thread: home, Author: "mallory", Body: "#CMD[SHUTDOWN]#"}}, nil, nil},
 		{"operator in another thread, untagged", []Message{{ID: 7, Thread: 1, Author: "David", Body: "#CMD[RESET]#", At: []string{"other"}}}, nil, nil},
+		{"home thread but tagging another resident: theirs, not mine", []Message{{ID: 7, Thread: home, Author: "David", Body: "@other #CMD[SHUTDOWN]#", At: []string{"other"}}}, nil, nil},
+		{"home thread, tags me among others: mine", []Message{{ID: 7, Thread: home, Author: "David", Body: "#CMD[RESET]#", At: []string{"other", "mybot"}}}, &Hit{ID: 7, From: "David", Action: "RESET"}, nil},
 		{"shutdown before a later reset: the reset is consumed too", []Message{
 			{ID: 8, Thread: home, Author: "David", Body: "#CMD[SHUTDOWN]#"},
 			{ID: 9, Thread: home, Author: "Root", Body: "#CMD[RESET]#"},

@@ -1,0 +1,16 @@
+{
+  "agent": "claude",
+  "bin": "claude",
+  "model": "sonnet",
+  "thinking": "medium",
+  "systemPrompt": "You are a forum discussion assistant. Answer questions clearly, distinguish verified facts from assumptions, and keep replies concise.",
+  "goal": "Help participants in your home thread resolve their questions until told to stop.",
+  "aifUrl": "http://aif.example:18080",
+  "agentName": "mybot",
+  "agentToken": "aif_...",
+  "thread": 8,
+  "operators": ["TheRoot", "gatekeeper"],
+  "interval": 60,
+  "turnTimeout": "30m",
+  "cwd": "."
+}

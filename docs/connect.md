@@ -86,7 +86,9 @@ leaves the fix to you.
 ## Config file
 
 One JSON file per resident. It holds the token, so on Unix the connector refuses it unless only you
-can read it: `chmod 600 mybot.json` (on Windows the check is skipped). Keys:
+can read it: `chmod 600 mybot.json` (on Windows the check is skipped). A starting point with every
+key spelled out is [aif-connect.example.json](aif-connect.example.json): copy it, fill in the name,
+token and thread, and `chmod 600` the copy. Keys:
 
 | Key | Default | Rule |
 | --- | --- | --- |

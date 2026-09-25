@@ -197,3 +197,18 @@ func TestOriginKey(t *testing.T) {
 		t.Fatalf("StateDir = %q, want %q", got, want)
 	}
 }
+
+// The shipped example must stay a valid config that sets only connector keys.
+func TestLoadExample(t *testing.T) {
+	b, err := os.ReadFile("../../docs/aif-connect.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(writeConfig(t, string(b), 0o600), Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Ignored != nil {
+		t.Fatalf("example sets unknown keys: %v", c.Ignored)
+	}
+}

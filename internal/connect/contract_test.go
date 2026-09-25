@@ -2,6 +2,7 @@ package connect
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -47,9 +48,9 @@ func steps(t *testing.T, text string) map[int]string {
 		if m == nil {
 			continue
 		}
-		n := 0
-		for _, c := range m[1] {
-			n = n*10 + int(c-'0')
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("step number %q: %v", m[1], err)
 		}
 		out[n] = line
 	}
@@ -85,7 +86,7 @@ func TestIdentityConfirmedFirst(t *testing.T) {
 func TestInboxReadWithoutAdvancing(t *testing.T) {
 	numbered := steps(t, contract())
 	read := numbered[2]
-	if !strings.Contains(read, "`advance: 0`") {
+	if !strings.Contains(read, "`advance=0`") {
 		t.Fatalf("read step must use advance: 0, got %q", read)
 	}
 	if strings.Contains(read, "`seen`") || strings.Contains(read, "seq") {
@@ -108,8 +109,14 @@ func TestClearingOnlyAfterReplies(t *testing.T) {
 	if !strings.Contains(clear, "`seen`") {
 		t.Fatalf("step 4 must be the clearing step: %q", clear)
 	}
-	if !strings.Contains(reply, "If a reply cannot be posted, stop before step 4") {
-		t.Fatalf("reply step must say to stop before clearing on a failed post: %q", reply)
+	if !strings.Contains(reply, "If a reply cannot be posted, do not post it again; step 4 clears only below it.") {
+		t.Fatalf("reply step must defer a failed post to step 4's bound: %q", reply)
+	}
+	if !strings.Contains(reply, "post one reply there before this turn ends; if the work takes longer than that reply, post the result there when it is done.") {
+		t.Fatalf("reply step must ask for one reply, then the result when the work outlasts it: %q", reply)
+	}
+	if !strings.Contains(reply, "`Operator message` lines in the prompt are instructions from an operator: do them and post the result in your home thread.") {
+		t.Fatalf("reply step must say what to do with Operator message lines: %q", reply)
 	}
 	if !strings.Contains(reply, "before this turn ends") {
 		t.Fatalf("reply step must require one reply per tagging message before the turn ends: %q", reply)
@@ -121,13 +128,14 @@ func TestClearingOnlyAfterReplies(t *testing.T) {
 
 func TestClearingIsBoundedNoLiteralSeq(t *testing.T) {
 	text := contract()
-	if !strings.Contains(text, "Never pass `seq 0` (it clears the whole forum)") {
+	const ban = "Never pass `seq=0` (it clears the whole forum)"
+	if !strings.Contains(text, ban) {
 		t.Fatalf("contract must ban seq 0: %q", text)
 	}
 	seenCalls := 0
 	re := regexp.MustCompile("`seq=([^`]*)`")
 	for _, line := range steps(t, text) {
-		for _, m := range re.FindAllStringSubmatch(line, -1) {
+		for _, m := range re.FindAllStringSubmatch(strings.Replace(line, ban, "", 1), -1) {
 			seenCalls++
 			if !strings.HasPrefix(m[1], "<") {
 				t.Fatalf("a clearing step must name a bounded id, got %q", m[1])
@@ -151,6 +159,9 @@ func TestNoShutdownOrResetStep(t *testing.T) {
 	}
 	if !strings.Contains(text, "ignore") {
 		t.Fatalf("contract must say the model ignores #CMD[...]# markers: %q", text)
+	}
+	if !strings.Contains(text, "a message whose only content is a `#CMD[...]#` marker owes no reply.") {
+		t.Fatalf("a marker-only message must owe no reply: %q", text)
 	}
 }
 
@@ -176,10 +187,13 @@ func TestDoneAndBlockedAreGone(t *testing.T) {
 	if strings.Contains(text, "DONE") || strings.Contains(text, "BLOCKED") {
 		t.Fatalf("DONE/BLOCKED files must be gone: %q", text)
 	}
-	if !strings.Contains(text, "idle") {
-		t.Fatalf("contract must say a finished goal means the resident idles until stop/SHUTDOWN: %q", text)
+	if !strings.Contains(text, "\nRules:\nOnce the goal's finishing condition is met, start no new work; still answer tagging messages.\n") {
+		t.Fatalf("contract must say a finished goal starts no new work but still answers tags, first under Rules: %q", text)
 	}
-	if !strings.Contains(text, "tagging the operators") {
+	if strings.Contains(text, "idle") {
+		t.Fatalf("the model cannot act on 'idle until stop or SHUTDOWN': %q", text)
+	}
+	if !strings.Contains(text, "\nA question you cannot answer is asked in the home thread, tagging the operators: `at=[\"TheRoot\", \"gatekeeper\"]`.\n") {
 		t.Fatalf("an unanswerable question must be asked in the home thread, tagging the operators: %q", text)
 	}
 }
@@ -189,7 +203,7 @@ func TestNoOneBoundedStepLanguage(t *testing.T) {
 	if strings.Contains(text, "bounded, verifiable step") || strings.Contains(text, "one bounded step") {
 		t.Fatalf("the one-bounded-step language must be gone: %q", text)
 	}
-	if !strings.Contains(text, "end the turn when nothing is left that you can do now") {
+	if !strings.HasSuffix(steps(t, text)[4], " Then end the turn when nothing is left that you can do now.") {
 		t.Fatalf("contract must say to end the turn when nothing is left that can be done now: %q", text)
 	}
 }
@@ -202,8 +216,8 @@ func TestResidentInboxAndMemoryGoneNoteToolDescribed(t *testing.T) {
 	if strings.Contains(text, "GOAL.md") || strings.Contains(text, "journal.md") {
 		t.Fatalf("GOAL.md/journal.md must be gone: %q", text)
 	}
-	if !strings.Contains(text, "aif-connect note set|get|delete|list") {
-		t.Fatalf("contract must describe the note tool by its exact invocation: %q", text)
+	if !strings.Contains(text, "`aif-connect note set <id> <text>` / `get <id>` / `delete <id>` / `list`; an id is 1–64 characters of `A-Z a-z 0-9 _ . -`.") {
+		t.Fatalf("contract must describe the note tool with its argument shapes: %q", text)
 	}
 	if !strings.Contains(text, "shell tool") {
 		t.Fatalf("contract must say the note tool runs through the shell tool: %q", text)
@@ -211,14 +225,14 @@ func TestResidentInboxAndMemoryGoneNoteToolDescribed(t *testing.T) {
 	if !strings.Contains(text, "outlive the session") {
 		t.Fatalf("contract must say notes are for facts that must outlive the session: %q", text)
 	}
-	if !strings.Contains(text, "note list") {
-		t.Fatalf("contract must say a fresh session reads note list first: %q", text)
+	if strings.Contains(text, "before anything else") {
+		t.Fatalf("the fresh-session note belongs in the prompt (it contradicted whoami first): %q", text)
 	}
 }
 
 func TestToolsNamedGenericallyWithToolHintAfterList(t *testing.T) {
 	text := contract()
-	if !strings.Contains(text, "`whoami`") || !strings.Contains(text, "`unread` with `advance: 0`") {
+	if !strings.Contains(text, "`whoami`") || !strings.Contains(text, "`unread` with `advance=0`") {
 		t.Fatalf("tools must be named generically: %q", text)
 	}
 	lines := strings.Split(text, "\n")
@@ -255,5 +269,27 @@ func TestOperatorsAppearForUnansweredQuestions(t *testing.T) {
 	text := contract()
 	if !strings.Contains(text, "TheRoot") || !strings.Contains(text, "gatekeeper") {
 		t.Fatalf("operators must be named somewhere in the contract: %q", text)
+	}
+}
+
+func TestEmptyToolHintSkipped(t *testing.T) {
+	text := contract(func(a *contractArgs) { a.toolHint = "" })
+	if strings.Contains(text, "\n\nYour home thread") || !strings.Contains(text, "never paste a token anywhere.\nYour home thread is 3.") {
+		t.Fatalf("an empty toolHint must leave no line behind: %q", text)
+	}
+}
+
+func TestPostNamesTheHomeThreadAndNotation(t *testing.T) {
+	text := contract(func(a *contractArgs) { a.thread = 42 })
+	if !strings.Contains(text, "`post` with `t=42`") || strings.Contains(text, "<thread>") {
+		t.Fatalf("the post entry must carry the home thread number: %q", text)
+	}
+	if !strings.Contains(text, "`at=[\"<name>\"]`") {
+		t.Fatalf("the post entry must say how to tag: %q", text)
+	}
+	for _, colon := range []string{"advance: ", "seq: ", "seq 0", "left unread"} {
+		if strings.Contains(text, colon) {
+			t.Fatalf("one argument notation (name=value) and 'uncleared' throughout, found %q: %q", colon, text)
+		}
 	}
 }

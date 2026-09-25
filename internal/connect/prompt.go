@@ -5,67 +5,85 @@ import (
 	"strings"
 )
 
-// WakeMsg is one queued local message (§ State, the "wake" list in state.json), rendered oldest
-// first as an "Operator message <id>: <text>" line.
-type WakeMsg struct {
-	ID   string
-	Text string
+// Reason is why a turn started (docs/superpowers/specs/2026-09-25-aif-connect-design.md, "## The loop").
+type Reason string
+
+const (
+	ReasonStart    Reason = "start"
+	ReasonInbox    Reason = "inbox"
+	ReasonWake     Reason = "wake"
+	ReasonRecover  Reason = "recover"
+	ReasonShutdown Reason = "shutdown"
+)
+
+var reasonText = map[Reason]string{
+	ReasonStart:    "first turn",
+	ReasonInbox:    "AIF reports unread messages for you",
+	ReasonWake:     "a local message was queued with wake",
+	ReasonRecover:  "your previous turn did not end cleanly",
+	ReasonShutdown: "an operator sent SHUTDOWN",
 }
 
-// PromptInput carries everything the per-turn prompt (docs/superpowers/specs/2026-09-25-aif-connect-design.md,
-// "### Prompt") needs to render. Reason is one of start|inbox|wake|recover|shutdown. Control is
-// either a recover turn's cause or the fresh-session note after RESET; it renders as its own line
-// when set, for any reason. From/MsgID describe who sent SHUTDOWN and which message carried it
-// (MsgID 0 means a local wake command, rendered "from local").
+// The recover turn's causes, passed as PromptInput.Control.
+const (
+	RecoverTimeout = "You've been killed due to turn timeout; the previous turn's work may be incomplete. Check the forum before repeating anything."
+	RecoverCrash   = "The harness died during your previous turn; its work may be incomplete. Check the forum before repeating anything."
+)
+
+// RecoverFailed is the recover cause for a turn the harness reported as failed.
+func RecoverFailed(cause string) string {
+	return fmt.Sprintf("Your previous turn failed: %s. Check the forum before repeating anything.", cause)
+}
+
+// PromptInput carries everything the per-turn prompt (design doc, "### Prompt") needs. Wake,
+// Shutdown and FreshSession come straight from State. Control is a recover turn's cause
+// (RecoverTimeout, RecoverCrash or RecoverFailed); the shutdown turn ignores it and FreshSession.
 type PromptInput struct {
-	Turn    int
-	Reason  string
-	Wake    []WakeMsg
-	Control string
-	Goal    string
-	From    string
-	MsgID   int64
+	Turn         int64
+	Reason       Reason
+	Wake         []Wake
+	Shutdown     *Ref // required for ReasonShutdown
+	FreshSession *Ref
+	Control      string
+	Goal         string
 }
 
-var reasonText = map[string]string{
-	"start":    "first turn",
-	"inbox":    "AIF reports unread messages for you",
-	"wake":     "a local message was queued with wake",
-	"recover":  "your previous turn did not end cleanly",
-	"shutdown": "an operator sent SHUTDOWN",
-}
+const contractReminder = "Follow the resident contract: whoami, read the inbox without clearing it, handle everything that woke you completely (every tagging message gets its reply, the work it asks for gets done, the result is posted in the home thread), clear what you handled with seen, and end the turn when nothing is left that you can do now."
 
-const contractText = "Follow the resident contract: whoami, read the inbox without clearing it, handle everything that\n" +
-	"woke you completely (every tagging message gets its reply, the work it asks for gets done, the\n" +
-	"result is posted in the home thread), clear what you handled with seen, and end the turn when\n" +
-	"nothing is left that you can do now."
-
-// Prompt renders one turn's prompt. See PromptInput and the design doc's "### Prompt" section.
-func Prompt(p PromptInput) string {
-	var lines []string
-	lines = append(lines, fmt.Sprintf("Turn %d, woken because %s.", p.Turn, reasonText[p.Reason]))
+// Prompt renders one turn's prompt; an unknown Reason, or ReasonShutdown without Shutdown, is an error.
+func Prompt(p PromptInput) (string, error) {
+	rt, ok := reasonText[p.Reason]
+	if !ok {
+		return "", fmt.Errorf("unknown turn reason %q", p.Reason)
+	}
+	lines := []string{fmt.Sprintf("Turn %d, woken because %s.", p.Turn, rt)}
 	for _, w := range p.Wake {
 		lines = append(lines, fmt.Sprintf("Operator message %s: %s", w.ID, w.Text))
 	}
 
-	if p.Reason == "shutdown" {
-		lines = append(lines, fmt.Sprintf("SHUTDOWN received from %s: reply to anything you still owe, post your goodbye in the home thread, clear the inbox with seen, then end the turn", who(p.From, p.MsgID)))
-		return strings.Join(lines, "\n")
+	if p.Reason == ReasonShutdown {
+		if p.Shutdown == nil {
+			return "", fmt.Errorf("shutdown turn without a Shutdown ref")
+		}
+		lines = append(lines, fmt.Sprintf("SHUTDOWN received from %s: reply to anything you still owe, post your goodbye in the home thread, clear what you handled with seen, then end the turn.", sender(*p.Shutdown)))
+		return strings.Join(lines, "\n"), nil
 	}
 
 	if p.Control != "" {
 		lines = append(lines, p.Control)
 	}
-	lines = append(lines, contractText)
-	lines = append(lines, fmt.Sprintf("Goal: %s", p.Goal))
-	return strings.Join(lines, "\n")
+	if p.FreshSession != nil {
+		lines = append(lines, fmt.Sprintf("Your session was reset by %s. Read `aif-connect note list` right after whoami; the inbox still holds everything unanswered.", sender(*p.FreshSession)))
+	}
+	lines = append(lines, contractReminder, "Goal: "+p.Goal)
+	return strings.Join(lines, "\n"), nil
 }
 
-// who renders the SHUTDOWN sender: "<name> (message <id>)" for a forum command, "local" for one
-// that arrived through the local wake queue (MsgID 0).
-func who(from string, msgID int64) string {
-	if msgID == 0 {
-		return "local"
+// sender renders who ordered a command: "<name> (message <id>)" for a forum command, "a local
+// operator" for one that came through the local wake queue (Msg 0).
+func sender(r Ref) string {
+	if r.Msg == 0 {
+		return "a local operator"
 	}
-	return fmt.Sprintf("%s (message %d)", from, msgID)
+	return fmt.Sprintf("%s (message %d)", r.From, r.Msg)
 }

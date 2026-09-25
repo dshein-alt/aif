@@ -1,7 +1,8 @@
-# Recorded from a live `pi --mode rpc` run (pi 0.87.1, pi-mcp-adapter 2.37.0,
-# freetoken/qwen3.8-flash-next; the local model server was down) against the dev AIF.
+# Recorded from a live `pi --mode rpc` run (pi 0.87.1, pi-mcp-adapter 2.37.0) against the dev AIF,
+# on the model freetoken/qwen3.8-flash-next: the local model server was down.
 # Kept verbatim except: message_update runs thinned, usage/system-prompt/messages bodies and
-# the whoami result trimmed.
+# the whoami result trimmed. The toolResult message_start/message_end pair stays: pi sends
+# message_end for every role, and only the assistant's decides the turn.
 out: {"type":"extension_ui_request","id":"8b025e77-1a54-4235-a18b-6ed70e437db1","method":"setStatus","statusKey":"mcp","statusText":"🔌 MCP: connecting to 1 servers..."}
 out: {"type":"extension_ui_request","id":"cf0764e5-a36b-4171-a88f-6f2c21933d9b","method":"notify","message":"MCP: 1 servers connected (29 tools)","notifyType":"info"}
 out: {"type":"extension_ui_request","id":"f4ac9bce-c677-42d0-9750-a38653a9c1d8","method":"setStatus","statusKey":"mcp","statusText":"\u001b[38;2;138;190;183m🔌 MCP: 1 server enabled (1 connected)\u001b[39m"}
@@ -26,6 +27,8 @@ out: {"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","co
 out: {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"\n\n"},{"type":"toolCall","id":"call_mcp--aif_0_89f7dce9","name":"mcp__aif","arguments":{"tool":"whoami"}}],"api":"openai-completions","provider":"freetoken","model":"qwen3.8-flash-next","stopReason":"toolUse","timestamp":1790337109440,"responseId":"chatcmpl-746","rawStopReason":"tool_calls"}}
 out: {"type":"tool_execution_start","toolCallId":"call_mcp--aif_0_89f7dce9","toolName":"mcp__aif","args":{"tool":"whoami"}}
 out: {"type":"tool_execution_end","toolCallId":"call_mcp--aif_0_89f7dce9","toolName":"mcp__aif","result":{"content":[{"type":"text","text":"{\"as\":\"mybot\",\"msg\":\"Connected to AIF (AI Interaction Forum).\",\"ok\":1}"}]},"isError":false}
+out: {"type":"message_start","message":{"role":"toolResult","toolCallId":"call_mcp--aif_0_89f7dce9","toolName":"mcp__aif","content":[{"type":"text","text":"{\"as\":\"mybot\",\"msg\":\"Connected to AIF (AI Interaction Forum).\",\"ok\":1}"}],"isError":false,"timestamp":1790337117190}}
+out: {"type":"message_end","message":{"role":"toolResult","toolCallId":"call_mcp--aif_0_89f7dce9","toolName":"mcp__aif","content":[{"type":"text","text":"{\"as\":\"mybot\",\"msg\":\"Connected to AIF (AI Interaction Forum).\",\"ok\":1}"}],"isError":false,"timestamp":1790337117190}}
 out: {"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"\n\n"},{"type":"toolCall","id":"call_mcp--aif_0_89f7dce9","name":"mcp__aif","arguments":{"tool":"whoami"}}],"api":"openai-completions","provider":"freetoken","model":"qwen3.8-flash-next","stopReason":"toolUse","timestamp":1790337109440,"responseId":"chatcmpl-746","rawStopReason":"tool_calls"},"toolResults":[]}
 out: {"type":"turn_start"}
 out: {"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"freetoken","model":"qwen3.8-flash-next","stopReason":"pending","timestamp":1790337117201}}

@@ -71,7 +71,7 @@ func TestPiRecordedTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var want any
-	_ = json.Unmarshal([]byte(`{"settings":{"scriptMode":false},"mcpServers":{"aif":{"url":"http://aif:18080/mcp","auth":"bearer","bearerToken":"aif_tok","lifecycle":"eager"}}}`), &want)
+	_ = json.Unmarshal([]byte(`{"settings":{"scriptMode":false},"mcpServers":{"aif":{"url":"http://aif:18080/mcp","auth":"bearer","bearerTokenEnv":"AIF_CONNECT_TOKEN","lifecycle":"eager"}}}`), &want)
 	if !reflect.DeepEqual(mcp, want) {
 		t.Fatalf("mcp.json %s", b)
 	}
@@ -87,7 +87,7 @@ func TestPiRecordedTurn(t *testing.T) {
 	}
 	want2 := []Event{
 		{Kind: Text, Text: "\n\n"},
-		{Kind: ToolCall, Text: "mcp__aif"},
+		{Kind: ToolCall, Text: "mcp__aif whoami"},
 		{Kind: Text, Text: "\n\n"},
 		{Kind: Text, Text: "OK"},
 		{Kind: TurnEnd, OK: true},
@@ -96,22 +96,28 @@ func TestPiRecordedTurn(t *testing.T) {
 		t.Fatalf("events %+v\nwant   %+v", got, want2)
 	}
 
+	if err := d.Start(context.Background(), Launch{Bin: d.launch.Bin, StateDir: stateDir}); err == nil {
+		t.Fatal("Start on a running driver succeeded")
+	}
 	if err := d.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := nextEvents(t, d, Exit); len(got) != 1 || got[0].Err == "" {
-		t.Fatalf("after Stop %+v, want one Exit with the signal's code", got)
+	if n := len(d.Events()); n != 0 {
+		t.Fatalf("%d events left after Stop", n)
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "mcp.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("mcp.json not removed: %v", err)
 	}
 }
 
+// Also: the token reaches the child only through its environment (the mcp.json names the var).
 func TestPiRejectedPrompt(t *testing.T) {
-	d := startPi(t, writeTranscript(t, `in: {"id":"t1","type":"prompt","message":"hi"}
+	logs := &logSink{}
+	d := startPi(t, writeTranscript(t, `env: AIF_CONNECT_TOKEN
+in: {"id":"t1","type":"prompt","message":"hi"}
 out: {"id":$id,"type":"response","command":"prompt","success":false,"error":"Agent is already streaming"}
 exit: 0
-`), Launch{SessionID: "saved-id"})
+`), Launch{SessionID: "saved-id", MCPToken: "aif_tok", Env: []string{"AIF_CONNECT_TOKEN=spoof"}, Verbose: true, Log: logs.log})
 	if d.SessionID() != "saved-id" {
 		t.Fatalf("session %q", d.SessionID())
 	}
@@ -122,14 +128,18 @@ exit: 0
 	if got := nextEvents(t, d, Exit); !slices.Equal(got, want) {
 		t.Fatalf("events %+v", got)
 	}
+	if !logs.has("<< aif_tok") {
+		t.Fatalf("child env lacks the token: %q", logs.lines)
+	}
 }
 
 // A model call that fails through pi's auto-retry (shapes from a live run with the model server
-// down): one TurnEnd at agent_settled, not one per agent_end; a dialog is cancelled at once.
+// down): one TurnEnd at agent_settled, not one per agent_end; a dialog is cancelled at once (the
+// fake waits at its in: line for the cancel, so without it no TurnEnd ever comes).
 func TestPiModelErrorAfterRetries(t *testing.T) {
 	d := startPi(t, writeTranscript(t, `in: {"id":"t1","type":"prompt","message":"hi"}
 out: {"id":$id,"type":"response","command":"prompt","success":true}
-out: {"type":"extension_ui_request","id":"u1","method":"confirm","title":"Trust this project?"}
+out: {"type":"extension_ui_request","id":"u1","method":"confirm","title":"Trust this project?","message":"It runs its own extensions."}
 in: {"type":"extension_ui_response","id":"u1","cancelled":true}
 out: {"type":"agent_start"}
 out: {"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"Connection error."}}
@@ -148,6 +158,79 @@ exit: 3
 	want := []Event{{Kind: TurnEnd, Err: "Connection error."}, {Kind: Exit, Err: "pi exited with code 3"}}
 	if got := nextEvents(t, d, Exit); !slices.Equal(got, want) {
 		t.Fatalf("events %+v", got)
+	}
+}
+
+// Stop discards the old process's events, queued or not, so a restart starts clean.
+func TestPiRestart(t *testing.T) {
+	ctx := context.Background()
+	d := startPi(t, writeTranscript(t, `in: {"id":"t1","type":"prompt","message":"hi"}
+out: {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"old"}}
+out: {"type":"agent_settled"}
+`), Launch{})
+	if err := d.Prompt(ctx, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); len(d.Events()) < 2; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the old turn's events never queued")
+		}
+	}
+	if err := d.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	bin := fakeHarness(t, writeTranscript(t, `in: {"id":"t2","type":"prompt","message":"again"}
+out: {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"new"}}
+out: {"type":"agent_settled"}
+`))
+	if err := d.Start(ctx, Launch{Bin: bin, StateDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Prompt(ctx, "again"); err != nil {
+		t.Fatal(err)
+	}
+	want := []Event{{Kind: Text, Text: "new"}, {Kind: TurnEnd, OK: true}}
+	if got := nextEvents(t, d, TurnEnd); !slices.Equal(got, want) {
+		t.Fatalf("events %+v", got)
+	}
+}
+
+// A Stop whose ctx ends first kills the harness and returns ctx.Err(); the Exit still comes, with
+// no Err: a deliberate stop is not a failure.
+func TestPiStopCtxEnds(t *testing.T) {
+	d := startPi(t, writeTranscript(t, "ignore-sigterm:\n"), Launch{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := d.Stop(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got := nextEvents(t, d, Exit); !slices.Equal(got, []Event{{Kind: Exit}}) {
+		t.Fatalf("events %+v", got)
+	}
+}
+
+func TestPiKilledBySignal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no signals")
+	}
+	d := startPi(t, writeTranscript(t, ""), Launch{})
+	_ = d.cmd.Process.Kill()
+	if got := nextEvents(t, d, Exit); !slices.Equal(got, []Event{{Kind: Exit, Err: "pi killed by signal"}}) {
+		t.Fatalf("events %+v", got)
+	}
+}
+
+// A settle nobody prompted for (no prompt pending) is logged, not a TurnEnd.
+func TestPiSettledWithoutPrompt(t *testing.T) {
+	logs := &logSink{}
+	d := startPi(t, writeTranscript(t, `out: {"type":"agent_settled"}
+exit: 0
+`), Launch{Log: logs.log})
+	if got := nextEvents(t, d, Exit); !slices.Equal(got, []Event{{Kind: Exit}}) {
+		t.Fatalf("events %+v", got)
+	}
+	if !logs.has("pi: agent_settled with no prompt pending, ignored") {
+		t.Fatalf("log %q", logs.lines)
 	}
 }
 

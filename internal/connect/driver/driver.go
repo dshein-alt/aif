@@ -11,7 +11,18 @@ import (
 	"sort"
 )
 
-// Driver is one harness. Start may be called again after an Exit event to restart it.
+// Driver is one harness. Start may be called again after an Exit event, or after Stop, to
+// restart it; Start while the harness is still running returns an error.
+//
+// Event contract, which every driver follows:
+//   - A driver emits exactly one TurnEnd per Prompt, and none without one pending; if the
+//     harness exits mid-turn, the Exit ends the turn instead.
+//   - Stop(ctx) returns only after it has drained and discarded every event of the process
+//     being stopped, up to and including its Exit; after Stop returns, Events() holds nothing
+//     from that process, so a restart never sees a stale Exit, Text or TurnEnd. If ctx ends
+//     first, Stop kills the process and returns ctx.Err(); that process's remaining events,
+//     its Exit last, then still arrive on Events() and must be read before Start.
+//   - The Exit of a process that Stop ended carries no Err: a deliberate stop is not a failure.
 type Driver interface {
 	Preflight(bin string) error                     // checks the harness binary can be used (pi: its MCP adapter is installed); no-op for most
 	Start(ctx context.Context, launch Launch) error // spawn, initialize, resume session if any

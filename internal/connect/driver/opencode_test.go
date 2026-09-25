@@ -54,7 +54,7 @@ func ocPrompt(id, s, text string) string {
 }
 
 // noEvent fails if an event arrives within 200 ms.
-func noEvent(t *testing.T, d Driver, after string) {
+func noEventWithin(t *testing.T, d Driver, after string) {
 	t.Helper()
 	select {
 	case e := <-d.Events():
@@ -86,7 +86,7 @@ func TestOpencodeRecordedTurn(t *testing.T) {
 	if err := d.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	noEvent(t, d, "Stop") // the Driver contract: Stop discards the Exit too
+	noEventWithin(t, d, "Stop") // the Driver contract: Stop discards the Exit too
 	if _, err := os.Stat(sysPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("system.md not removed: %v", err)
 	}
@@ -367,7 +367,7 @@ out: {"jsonrpc":"2.0","id":$id,"error":{"code":-32603,"message":"Internal error:
 	if err == nil || err.Error() != "opencode: session/new: Internal error: OpenCode service failure" {
 		t.Fatalf("err %v", err)
 	}
-	noEvent(t, d, "a failed Start")
+	noEventWithin(t, d, "a failed Start")
 }
 
 // A live opencode that never answers fails Start after opencodeStartTimeout, naming the request.
@@ -380,7 +380,7 @@ func TestOpencodeHandshakeTimeout(t *testing.T) {
 	if err == nil || err.Error() != "opencode did not answer session/new within 200ms" {
 		t.Fatalf("err %v", err)
 	}
-	noEvent(t, d, "a timed-out Start")
+	noEventWithin(t, d, "a timed-out Start")
 }
 
 func TestOpencodePreflight(t *testing.T) {

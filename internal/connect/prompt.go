@@ -26,13 +26,13 @@ var reasonText = map[Reason]string{
 
 // The recover turn's causes, passed as PromptInput.Control.
 const (
-	RecoverTimeout = "You've been killed due to turn timeout; the previous turn's work may be incomplete. Check the forum before repeating anything."
-	RecoverCrash   = "The harness died during your previous turn; its work may be incomplete. Check the forum before repeating anything."
+	RecoverTimeout = "You've been killed due to turn timeout; the previous turn's work may be incomplete. Read the home thread with the `thread` tool before repeating anything."
+	RecoverCrash   = "The harness died during your previous turn; its work may be incomplete. Read the home thread with the `thread` tool before repeating anything."
 )
 
 // RecoverFailed is the recover cause for a turn the harness reported as failed.
 func RecoverFailed(cause string) string {
-	return fmt.Sprintf("Your previous turn failed: %s. Check the forum before repeating anything.", cause)
+	return fmt.Sprintf("Your previous turn failed: %s. Read the home thread with the `thread` tool before repeating anything.", cause)
 }
 
 // PromptInput carries everything the per-turn prompt (design doc, "### Prompt") needs. Wake,
@@ -48,7 +48,7 @@ type PromptInput struct {
 	Goal         string
 }
 
-const contractReminder = "Follow the resident contract: whoami, read the inbox without clearing it, handle everything that woke you completely (every tagging message gets its reply, the work it asks for gets done, the result is posted in the home thread), clear what you handled with seen, and end the turn when nothing is left that you can do now."
+const contractReminder = "Follow the resident contract: whoami, read the inbox without clearing it, handle everything that woke you completely (every tagging message gets its reply, and work that outlasts the reply gets its result posted), clear what you handled with seen, and end the turn when nothing is left that you can do now."
 
 // Prompt renders one turn's prompt; an unknown Reason, or ReasonShutdown without Shutdown, is an error.
 func Prompt(p PromptInput) (string, error) {
@@ -65,7 +65,7 @@ func Prompt(p PromptInput) (string, error) {
 		if p.Shutdown == nil {
 			return "", fmt.Errorf("shutdown turn without a Shutdown ref")
 		}
-		lines = append(lines, fmt.Sprintf("SHUTDOWN received from %s: reply to anything you still owe, post your goodbye in the home thread, clear what you handled with seen, then end the turn.", sender(*p.Shutdown)))
+		lines = append(lines, fmt.Sprintf("SHUTDOWN received from %s: read the inbox as usual, then reply to anything you still owe, do any operator messages above, post your goodbye in the home thread, clear what you handled with seen, and end the turn.", sender(*p.Shutdown)))
 		return strings.Join(lines, "\n"), nil
 	}
 
@@ -73,7 +73,7 @@ func Prompt(p PromptInput) (string, error) {
 		lines = append(lines, p.Control)
 	}
 	if p.FreshSession != nil {
-		lines = append(lines, fmt.Sprintf("Your session was reset by %s. Read `aif-connect note list` right after whoami; the inbox still holds everything unanswered.", sender(*p.FreshSession)))
+		lines = append(lines, fmt.Sprintf("Your session was reset by %s. Run `aif-connect note list` with the shell tool right after whoami; the inbox still holds everything unanswered.", sender(*p.FreshSession)))
 	}
 	lines = append(lines, contractReminder, "Goal: "+p.Goal)
 	return strings.Join(lines, "\n"), nil

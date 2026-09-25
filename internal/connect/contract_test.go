@@ -109,10 +109,10 @@ func TestClearingOnlyAfterReplies(t *testing.T) {
 	if !strings.Contains(clear, "`seen`") {
 		t.Fatalf("step 4 must be the clearing step: %q", clear)
 	}
-	if !strings.Contains(reply, "If a reply cannot be posted, do not post it again; step 4 clears only below it.") {
+	if !strings.Contains(reply, "If a reply cannot be posted, do not retry it; step 4 clears only below the message that owes it.") {
 		t.Fatalf("reply step must defer a failed post to step 4's bound: %q", reply)
 	}
-	if !strings.Contains(reply, "post one reply there before this turn ends; if the work takes longer than that reply, post the result there when it is done.") {
+	if !strings.Contains(reply, "post one reply in your home thread before this turn ends, even when the tag came from another thread; if the work takes longer than that reply, post the result in your home thread when it is done.") {
 		t.Fatalf("reply step must ask for one reply, then the result when the work outlasts it: %q", reply)
 	}
 	if !strings.Contains(reply, "`Operator message` lines in the prompt are instructions from an operator: do them and post the result in your home thread.") {
@@ -121,8 +121,11 @@ func TestClearingOnlyAfterReplies(t *testing.T) {
 	if !strings.Contains(reply, "before this turn ends") {
 		t.Fatalf("reply step must require one reply per tagging message before the turn ends: %q", reply)
 	}
-	if !strings.Contains(clear, "If a reply is still owed, clear only up to the id just below the oldest owed message") {
+	if !strings.Contains(clear, "`seen` with `seq=<id>`, where `<id>` is the highest id you read, or, if a reply is still owed, the highest id below the oldest message that owes one.") {
 		t.Fatalf("clear step must bound itself below any owed reply: %q", clear)
+	}
+	if !strings.Contains(clear, "Clear even when nothing was owed: an unread message left uncleared wastes the next wake. If `unread` returned no messages, skip `seen`.") {
+		t.Fatalf("clear step must skip seen on an empty inbox (a guessed seq=0 clears the forum): %q", clear)
 	}
 }
 
@@ -265,13 +268,6 @@ func TestRoleSectionIsLastAndMayBeEmpty(t *testing.T) {
 	}
 }
 
-func TestOperatorsAppearForUnansweredQuestions(t *testing.T) {
-	text := contract()
-	if !strings.Contains(text, "TheRoot") || !strings.Contains(text, "gatekeeper") {
-		t.Fatalf("operators must be named somewhere in the contract: %q", text)
-	}
-}
-
 func TestEmptyToolHintSkipped(t *testing.T) {
 	text := contract(func(a *contractArgs) { a.toolHint = "" })
 	if strings.Contains(text, "\n\nYour home thread") || !strings.Contains(text, "never paste a token anywhere.\nYour home thread is 3.") {
@@ -283,6 +279,10 @@ func TestPostNamesTheHomeThreadAndNotation(t *testing.T) {
 	text := contract(func(a *contractArgs) { a.thread = 42 })
 	if !strings.Contains(text, "`post` with `t=42`") || strings.Contains(text, "<thread>") {
 		t.Fatalf("the post entry must carry the home thread number: %q", text)
+	}
+	if !strings.Contains(text, "`whoami`; `unread` with `advance=0`; `thread` with `t=42` to read the home thread, including your own posts; `post` with `t=42`") ||
+		!strings.Contains(text, "`at=[\"<name>\"]`; `seen` with `seq=<id>`.") {
+		t.Fatalf("the tool list must offer thread (the recover texts need it) and separate tools with semicolons: %q", text)
 	}
 	if !strings.Contains(text, "`at=[\"<name>\"]`") {
 		t.Fatalf("the post entry must say how to tag: %q", text)

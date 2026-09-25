@@ -9,9 +9,9 @@ import (
 // executable tests: every reason's rendering, the queued-message lines, the recover and
 // fresh-session lines, and the shutdown variant's different shape (no contract/goal lines).
 
-const contractLine = "Follow the resident contract: whoami, read the inbox without clearing it, handle everything that woke you completely (every tagging message gets its reply, the work it asks for gets done, the result is posted in the home thread), clear what you handled with seen, and end the turn when nothing is left that you can do now."
+const contractLine = "Follow the resident contract: whoami, read the inbox without clearing it, handle everything that woke you completely (every tagging message gets its reply, and work that outlasts the reply gets its result posted), clear what you handled with seen, and end the turn when nothing is left that you can do now."
 
-const shutdownTail = ": reply to anything you still owe, post your goodbye in the home thread, clear what you handled with seen, then end the turn."
+const shutdownTail = ": read the inbox as usual, then reply to anything you still owe, do any operator messages above, post your goodbye in the home thread, clear what you handled with seen, and end the turn."
 
 func TestPrompt(t *testing.T) {
 	tail := contractLine + "\nGoal: Help out."
@@ -30,19 +30,19 @@ func TestPrompt(t *testing.T) {
 				"Operator message a2: then ping me\n" + tail},
 		{"recover timeout", PromptInput{Turn: 9, Reason: ReasonRecover, Control: RecoverTimeout},
 			"Turn 9, woken because your previous turn did not end cleanly.\n" +
-				"You've been killed due to turn timeout; the previous turn's work may be incomplete. Check the forum before repeating anything.\n" + tail},
+				"You've been killed due to turn timeout; the previous turn's work may be incomplete. Read the home thread with the `thread` tool before repeating anything.\n" + tail},
 		{"recover crash", PromptInput{Turn: 9, Reason: ReasonRecover, Control: RecoverCrash},
 			"Turn 9, woken because your previous turn did not end cleanly.\n" +
-				"The harness died during your previous turn; its work may be incomplete. Check the forum before repeating anything.\n" + tail},
+				"The harness died during your previous turn; its work may be incomplete. Read the home thread with the `thread` tool before repeating anything.\n" + tail},
 		{"recover failed", PromptInput{Turn: 9, Reason: ReasonRecover, Control: RecoverFailed("exit status 1")},
 			"Turn 9, woken because your previous turn did not end cleanly.\n" +
-				"Your previous turn failed: exit status 1. Check the forum before repeating anything.\n" + tail},
+				"Your previous turn failed: exit status 1. Read the home thread with the `thread` tool before repeating anything.\n" + tail},
 		{"fresh session", PromptInput{Turn: 1, Reason: ReasonStart, FreshSession: &Ref{From: "TheRoot", Msg: 4712}},
 			"Turn 1, woken because first turn.\n" +
-				"Your session was reset by TheRoot (message 4712). Read `aif-connect note list` right after whoami; the inbox still holds everything unanswered.\n" + tail},
+				"Your session was reset by TheRoot (message 4712). Run `aif-connect note list` with the shell tool right after whoami; the inbox still holds everything unanswered.\n" + tail},
 		{"fresh session local", PromptInput{Turn: 1, Reason: ReasonStart, FreshSession: &Ref{From: "TheRoot"}},
 			"Turn 1, woken because first turn.\n" +
-				"Your session was reset by a local operator. Read `aif-connect note list` right after whoami; the inbox still holds everything unanswered.\n" + tail},
+				"Your session was reset by a local operator. Run `aif-connect note list` with the shell tool right after whoami; the inbox still holds everything unanswered.\n" + tail},
 		{"shutdown forum", PromptInput{Turn: 4, Reason: ReasonShutdown, Shutdown: &Ref{From: "TheRoot", Msg: 4712}},
 			"Turn 4, woken because an operator sent SHUTDOWN.\n" +
 				"SHUTDOWN received from TheRoot (message 4712)" + shutdownTail},

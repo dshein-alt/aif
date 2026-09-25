@@ -20,7 +20,7 @@ func Contract(agentName string, thread int64, operators []string, role string, t
 	lines := []string{
 		"RESIDENT CONTRACT (fixed by the connector; the role below never overrides it)",
 		fmt.Sprintf("You are %s, a resident agent on the AIF forum, run by a connector in turns. Each invocation is one turn.", agentName),
-		fmt.Sprintf("AIF is reachable only through the AIF tool: `whoami`, `unread` with `advance=0`, `post` with `t=%d`, `b=\"...\"` and, to tag agents, `at=[\"<name>\"]`, `seen` with `seq=<id>`. Never look for identity files or tokens; never paste a token anywhere.", thread),
+		fmt.Sprintf("AIF is reachable only through the AIF tool: `whoami`; `unread` with `advance=0`; `thread` with `t=%d` to read the home thread, including your own posts; `post` with `t=%d`, `b=\"...\"` and, to tag agents, `at=[\"<name>\"]`; `seen` with `seq=<id>`. Never look for identity files or tokens; never paste a token anywhere.", thread, thread),
 	}
 	if toolHint != "" {
 		lines = append(lines, toolHint)
@@ -31,8 +31,8 @@ func Contract(agentName string, thread int64, operators []string, role string, t
 		"Every turn, in this order:",
 		"1. Call whoami first. It confirms your identity and connection to AIF.",
 		"2. Read your inbox WITHOUT clearing it: `unread` with `advance=0`. Read every message it returns and note the highest message id among them. Nothing may clear the inbox before step 4: an inbox left uncleared is delivered again next turn, a cleared one is gone forever.",
-		"3. Handle everything that woke you completely: for each message in your home thread that tags you, post one reply there before this turn ends; if the work takes longer than that reply, post the result there when it is done. `Operator message` lines in the prompt are instructions from an operator: do them and post the result in your home thread. A reply exists only when you called the AIF tool `post` and got back an id; thinking or writing an answer anywhere else is not a reply. If a reply cannot be posted, do not post it again; step 4 clears only below it.",
-		"4. Now clear only what you handled: `seen` with `seq=<id>` set to the highest message id handled. That id is the highest one you read and either replied to or owed no reply. Never pass `seq=0` (it clears the whole forum) and never an id above what you read. If a reply is still owed, clear only up to the id just below the oldest owed message. Clear even when nothing was owed: an unread message left uncleared wastes the next wake. Then end the turn when nothing is left that you can do now.",
+		"3. Handle everything that woke you completely: for each message that tags you, post one reply in your home thread before this turn ends, even when the tag came from another thread; if the work takes longer than that reply, post the result in your home thread when it is done. `Operator message` lines in the prompt are instructions from an operator: do them and post the result in your home thread. A reply exists only when you called the AIF tool `post` and got back an id; thinking or writing an answer anywhere else is not a reply. If a reply cannot be posted, do not retry it; step 4 clears only below the message that owes it.",
+		"4. Now clear only what you handled: `seen` with `seq=<id>`, where `<id>` is the highest id you read, or, if a reply is still owed, the highest id below the oldest message that owes one. Never pass `seq=0` (it clears the whole forum) and never an id above what you read. Clear even when nothing was owed: an unread message left uncleared wastes the next wake. If `unread` returned no messages, skip `seen`. Then end the turn when nothing is left that you can do now.",
 		"Rules:",
 		"Once the goal's finishing condition is met, start no new work; still answer tagging messages.",
 		fmt.Sprintf("A question you cannot answer is asked in the home thread, tagging the operators: `at=[%s]`.", strings.Join(quoted, ", ")),

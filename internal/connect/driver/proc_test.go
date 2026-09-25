@@ -210,3 +210,61 @@ func TestRegistry(t *testing.T) {
 		t.Fatalf("names %q", n)
 	}
 }
+
+func TestProcStopUndrained(t *testing.T) {
+	p, sink := startFake(t, "out: a\nout: b\nout: c\n", Launch{Verbose: true})
+	p.grace = 2 * time.Second
+	for !sink.has("<< a") { // the copy goroutine is now blocked handing "a" to nobody
+		time.Sleep(10 * time.Millisecond)
+	}
+	done := make(chan struct{})
+	go func() { _ = p.Stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(p.grace):
+		t.Fatal("Stop hung on an undrained Lines")
+	}
+}
+
+func TestProcSendBeforeStart(t *testing.T) {
+	if err := newProc(Launch{}).Send("x"); err == nil {
+		t.Fatal("Send before start succeeded")
+	}
+}
+
+func TestFakeIDTokenAndDynamicAfterComment(t *testing.T) {
+	p, _ := startFake(t, "# a comment\n\ndynamic: id\nin: {\"id\":5}\nout: {\"id\":$id,\"x\":\"$idle\"}\nexit: 0\n", Launch{})
+	if err := p.Send(`{"id":7}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := collect(t, p); !slices.Equal(got, []string{`{"id":7,"x":"$idle"}`}) || p.ExitCode() != 0 {
+		t.Fatalf("lines %q, exit %d", got, p.ExitCode())
+	}
+	p, sink := startFake(t, "out: {\"id\":$id}\n", Launch{})
+	if got := collect(t, p); len(got) != 0 || p.ExitCode() != 98 {
+		t.Fatalf("$id with no id: lines %q, exit %d, log %q", got, p.ExitCode(), sink.lines)
+	}
+}
+
+func TestLineWriterCap(t *testing.T) {
+	defer func(n int) { maxLine = n }(maxLine)
+	maxLine = 8
+	var got []string
+	w := &lineWriter{emit: func(l string) { got = append(got, l) }}
+	_, _ = w.Write([]byte("0123456789"))
+	_, _ = w.Write([]byte("ab\n"))
+	if !slices.Equal(got, []string{"0123456789", "ab"}) {
+		t.Fatalf("lines %q", got)
+	}
+}
+
+func TestRegisterDuplicatePanics(t *testing.T) {
+	Register("dup-test", func() Driver { return nil })
+	defer delete(registry, "dup-test")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("duplicate Register did not panic")
+		}
+	}()
+	Register("dup-test", func() Driver { return nil })
+}

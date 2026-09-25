@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,17 +20,23 @@ import (
 // instead of running tests. TestMain intercepts before flag parsing, so the fake accepts any argv
 // (a driver passes its harness flags, e.g. `--mode rpc`, straight to it).
 //
-// Transcript lines (an optional first line `dynamic: key1,key2,...`):
+// Transcript lines (an optional `dynamic: key1,key2,...` as the first line that is neither blank
+// nor a # comment):
 //
 //	in: <json>        the next stdin line must deep-equal it as JSON once the values of dynamic
 //	                  keys (at any depth) are "*" on both sides; non-JSON is compared verbatim.
-//	                  A request's "id" is captured. Mismatch: `MISMATCH expected=… got=…` on
-//	                  stderr, exit 99.
-//	out: <json>       printed to stdout, with the literal $id replaced by the last captured id as
-//	                  raw JSON (write `"id":$id`, unquoted)
+//	                  Mismatch: `MISMATCH expected=… got=…` on stderr, exit 99.
+//	                  The "id" of any JSON line read is captured: a request's, but also a
+//	                  client's response to a server-initiated request (ACP / app-server
+//	                  approvals), so order in: and out: lines with that in mind.
+//	out: <json>       printed to stdout, with the token $id (not followed by a letter, digit or
+//	                  _, so $idle stays as is) replaced by the last captured id as raw JSON: write
+//	                  `"id":$id`, unquoted. $id with no id captured yet: exit 98.
 //	exit: <code>      exit with that code
 //	env: NAME         print the env var's value to stdout
 //	ignore-sigterm:   ignore SIGTERM from here on (no-op on Windows)
+//	spawn: <argv>     start argv (space-separated, no shell) detached from the fake's stdio and
+//	                  not waited for, then print its pid to stdout
 //
 // Blank lines and lines starting with # are skipped. At the end of the transcript the fake
 // reads stdin until EOF, then exits 0.
@@ -57,11 +65,17 @@ func runFake(path string) int {
 	}
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	dynamic := map[string]bool{}
-	if rest, ok := strings.CutPrefix(lines[0], "dynamic:"); ok {
-		for _, k := range strings.Split(rest, ",") {
-			dynamic[strings.TrimSpace(k)] = true
+	for i, l := range lines {
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
 		}
-		lines = lines[1:]
+		if rest, ok := strings.CutPrefix(l, "dynamic:"); ok {
+			for _, k := range strings.Split(rest, ",") {
+				dynamic[strings.TrimSpace(k)] = true
+			}
+			lines[i] = "" // skipped below
+		}
+		break
 	}
 	stdin := bufio.NewReader(os.Stdin)
 	id := ""
@@ -84,7 +98,12 @@ func runFake(path string) int {
 				id = string(req["id"])
 			}
 		case strings.HasPrefix(l, "out: "):
-			fmt.Println(strings.ReplaceAll(l[len("out: "):], "$id", id))
+			out := l[len("out: "):]
+			if id == "" && fakeID.MatchString(out) {
+				fmt.Fprintf(os.Stderr, "$id before any id was captured: %s\n", l)
+				return 98
+			}
+			fmt.Println(fakeID.ReplaceAllLiteralString(out, id))
 		case strings.HasPrefix(l, "exit: "):
 			code, _ := strconv.Atoi(strings.TrimSpace(l[len("exit: "):]))
 			return code
@@ -92,6 +111,14 @@ func runFake(path string) int {
 			fmt.Println(os.Getenv(strings.TrimSpace(l[len("env: "):])))
 		case l == "ignore-sigterm:":
 			signal.Ignore(syscall.SIGTERM)
+		case strings.HasPrefix(l, "spawn: "):
+			argv := strings.Fields(l[len("spawn: "):])
+			cmd := exec.Command(argv[0], argv[1:]...)
+			if err := cmd.Start(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 98
+			}
+			fmt.Println(cmd.Process.Pid)
 		default:
 			fmt.Fprintf(os.Stderr, "bad transcript line: %s\n", l)
 			return 98
@@ -100,6 +127,9 @@ func runFake(path string) int {
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	return 0
 }
+
+// fakeID is the $id token of an out: line.
+var fakeID = regexp.MustCompile(`\$id\b`)
 
 func fakeMatch(want, got string, dynamic map[string]bool) bool {
 	var w, g any

@@ -64,8 +64,14 @@ var (
 
 var registry = map[string]func() Driver{}
 
-// Register makes a driver available under name; drivers call it from init.
-func Register(name string, ctor func() Driver) { registry[name] = ctor }
+// Register makes a driver available under name; drivers call it from init. A duplicate name
+// panics, like database/sql.Register.
+func Register(name string, ctor func() Driver) {
+	if _, dup := registry[name]; dup {
+		panic("driver: Register called twice for " + name)
+	}
+	registry[name] = ctor
+}
 
 // New returns a fresh driver registered under name.
 func New(name string) (Driver, error) {

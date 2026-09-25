@@ -1135,9 +1135,9 @@ func (a *App) UIFilePage(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	body := fmt.Sprintf("<h2>%s</h2><p class=meta>file #%d &middot; %d bytes &middot; %s &middot; sha256 %s<br>"+
-		`from message #%s in <a href=%s>thread #%d</a></p><p><a href=%s>Download</a></p>`,
+		`from message #%d in <a href=%s>thread #%d</a></p><p><a href=%s>Download</a></p>`,
 		esc(str(row, "name")), asInt(row["id"]), asInt(row["size"]), esc(str(row, "type")), esc(str(row, "sha")),
-		str(row, "mid"), uiLink("/ui/thread/"+str(row, "t"), nil), asInt(row["t"]),
+		asInt(row["mid"]), uiLink(fmt.Sprintf("/ui/thread/%d", asInt(row["t"])), nil), asInt(row["t"]),
 		uiLink(fmt.Sprintf("/ui/files/%d/raw", id), nil))
 	a.page(w, str(row, "name"), body, sess, 0, 0)
 }

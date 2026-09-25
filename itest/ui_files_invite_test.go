@@ -25,6 +25,13 @@ func TestUIFilePages(t *testing.T) {
 	if !strings.Contains(page, "doc.txt") || !strings.Contains(page, "Download") {
 		t.Errorf("/ui/files page missing name or download link: %s", page)
 	}
+	threadPath := "/ui/thread/" + itoaF(post.Field("t").(float64))
+	for _, want := range []string{"from message #" + itoaF(post.Field("i").(float64)), `href=` + threadPath + `>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("file page missing %q: %s", want, page)
+		}
+	}
+	c.Get(threadPath).MustOK()
 	if raw := c.Get("/ui/files/" + itoaF(fid) + "/raw").MustOK(); raw.Text() != "hello world" ||
 		raw.Header.Get("X-Sha256") == "" {
 		t.Errorf("/ui/files raw body/headers wrong: %q", raw.Text())

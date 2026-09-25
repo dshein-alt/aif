@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -11,7 +13,7 @@ function exampleConfig(stateDir) {
 		id: "abc123",
 		cwd: stateDir,
 		stateDir,
-		intervalSeconds: 10,
+		intervalSeconds: 1,
 		maxTurns: 1,
 		provider: "provider",
 		model: "model",
@@ -22,6 +24,12 @@ function exampleConfig(stateDir) {
 		trustedProject: true,
 		piInvocation: { command: process.execPath, prefixArgs: ["/fake/pi.js"] },
 	};
+}
+
+function writeMcp(stateDir, url = "http://127.0.0.1:1/mcp") {
+	return writeFile(path.join(stateDir, "mcp.json"), JSON.stringify({
+		mcpServers: { aif: { url, auth: "bearer", bearerToken: "aif_test", lifecycle: "eager" } },
+	}));
 }
 
 test("buildPiArgs carries explicit provider, model, thinking, MCP config, trust, and session", () => {
@@ -48,7 +56,7 @@ test("supervisor runs a bounded turn and records final metadata", async () => {
 	for (const name of ["SYSTEM.md", "GOAL.md", "journal.md"]) {
 		await writeFile(path.join(stateDir, name), `${name}\n`);
 	}
-	await writeFile(path.join(stateDir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+	await writeMcp(stateDir);
 	const fakePi = path.join(stateDir, "fake-pi.mjs");
 	await writeFile(
 		fakePi,
@@ -83,7 +91,7 @@ test("DONE created during a turn terminates the supervisor before sleeping", asy
 	for (const name of ["SYSTEM.md", "GOAL.md", "journal.md"]) {
 		await writeFile(path.join(stateDir, name), `${name}\n`);
 	}
-	await writeFile(path.join(stateDir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+	await writeMcp(stateDir);
 	const fakePi = path.join(stateDir, "fake-pi.mjs");
 	await writeFile(
 		fakePi,
@@ -91,7 +99,6 @@ test("DONE created during a turn terminates the supervisor before sleeping", asy
 	);
 	const config = {
 		...exampleConfig(stateDir),
-		intervalSeconds: 60,
 		maxTurns: 3,
 		piInvocation: { command: process.execPath, prefixArgs: [fakePi] },
 	};
@@ -113,6 +120,7 @@ test("RESET waits for the child and starts a fresh session immediately", async (
 	const stateDir = await mkdtemp(path.join(tmpdir(), "pi-resident-reset-test-"));
 	t.after(() => rm(stateDir, { recursive: true, force: true }));
 	await mkdir(path.join(stateDir, "sessions"));
+	await writeMcp(stateDir);
 	await writeFile(path.join(stateDir, "sessions/old.jsonl"), "old context");
 	await writeFile(path.join(stateDir, "GOAL.md"), "keep working");
 	const fakePi = path.join(stateDir, "fake-pi.mjs");
@@ -141,7 +149,7 @@ if (turn === 1) {
   fs.writeFileSync(path.join(dir, 'DONE'), 'finished new session');
 }
 `);
-	const config = { ...exampleConfig(stateDir), intervalSeconds: 60, maxTurns: 2,
+	const config = { ...exampleConfig(stateDir), maxTurns: 2,
 		piInvocation: { command: process.execPath, prefixArgs: [fakePi] } };
 	const configPath = path.join(stateDir, "config.json");
 	await writeFile(configPath, JSON.stringify(config));
@@ -156,4 +164,49 @@ if (turn === 1) {
 	assert.equal(observed.goal, "keep working");
 	assert.doesNotMatch(observed.journal, /written after/);
 	assert.equal(JSON.parse(await readFile(path.join(stateDir, "resident.json"))).lastExitCode, 0);
+});
+
+test("the supervisor long-polls AIF itself and runs a turn only when the inbox grew", async (t) => {
+	const stateDir = await mkdtemp(path.join(tmpdir(), "pi-resident-poll-test-"));
+	t.after(() => rm(stateDir, { recursive: true, force: true }));
+	await mkdir(path.join(stateDir, "sessions"));
+	const polls = [];
+	// Turn 1 is unconditional; then n:1 with a fresh seq must start turn 2, and the same seq again
+	// (a message left unread) must not start turn 3.
+	const answers = [{ n: 1, seq: 7 }, { n: 1, seq: 7 }, { n: 1, seq: 7 }];
+	const server = createServer((request, response) => {
+		polls.push({ url: request.url, auth: request.headers.authorization });
+		response.setHeader("content-type", "application/json");
+		response.end(JSON.stringify({ ...(answers.shift() ?? { n: 0, seq: 7 }), men: 0, cursor: 0 }));
+	});
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => server.close());
+	await writeMcp(stateDir, `http://127.0.0.1:${server.address().port}/mcp`);
+	const fakePi = path.join(stateDir, "fake-pi.mjs");
+	await writeFile(fakePi, `import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(path.join(stateDir, "prompts.txt"))}, process.argv.at(-1) + "\\n");`);
+	const config = { ...exampleConfig(stateDir), maxTurns: 3,
+		piInvocation: { command: process.execPath, prefixArgs: [fakePi] } };
+	const configPath = path.join(stateDir, "config.json");
+	await writeFile(configPath, JSON.stringify(config));
+
+	const run = runResident(configPath);
+	// Nothing new after turn 2: the supervisor sits in poll/backoff, so stop it with the same signal
+	// the extension sends. (A SIGTERM sent before turn 2 would be a bug in this test's timing.)
+	await new Promise((resolve) => {
+		const check = () => {
+			if (existsSync(path.join(stateDir, "turn-0002.jsonl")) && polls.length >= 3) resolve();
+			else setTimeout(check, 20);
+		};
+		check();
+	});
+	process.emit("SIGTERM");
+	const result = await run;
+	assert.equal(result.turn, 2, "the unchanged seq must not have triggered a third turn");
+	assert.equal(result.status, "stopped");
+	const prompts = (await readFile(path.join(stateDir, "prompts.txt"), "utf8")).trim().split("\n");
+	assert.match(prompts[0], /Resident turn 1, woken because first turn/);
+	assert.match(prompts[1], /Resident turn 2, woken because AIF reports unread messages/);
+	assert.equal(polls[0].auth, "Bearer aif_test");
+	assert.match(polls[0].url, /^\/api\/poll\?wait=1$/, "the poll must long-poll for the interval and never pass advance");
 });

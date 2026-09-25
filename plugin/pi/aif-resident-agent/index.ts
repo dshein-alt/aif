@@ -16,7 +16,7 @@ const RUNNER = path.join(EXTENSION_DIR, "runner.mjs");
 const CHILD_EXTENSION = path.join(EXTENSION_DIR, "resident-child.ts");
 const NODE_RUNTIME = /^node(?:\.exe)?$/i.test(path.basename(process.execPath)) ? process.execPath : "node";
 const RESIDENT_PREFIX = "pi-resident-";
-const DEFAULT_INTERVAL_SECONDS = 300;
+const DEFAULT_INTERVAL_SECONDS = 60;
 const DEFAULT_MAX_TURNS = 24;
 const DEFAULT_THINKING_LEVEL = "medium";
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -88,7 +88,7 @@ export function residentContract(launch: LaunchOptions): string {
 		`3. SHUTDOWN: if a message from one of [${who}] contains the word SHUTDOWN, post "Goodbye from ${name}: SHUTDOWN received." in your home thread, create the file DONE containing "SHUTDOWN received", and end the turn. Do nothing else.`,
 		"4. For each message in your home thread that tags you, post one short reply there. Reply once per message before this turn ends. A reply exists only when you called mcp__aif with tool \"post\" and got back an id; thinking or writing an answer anywhere else is not a reply. If a reply cannot be posted, stop before step 6 so the message comes back next turn.",
 		`5. RESET: if a message you just read from one of [${who}] contains the standalone word RESET, first clear what you read with mcp__aif({"tool":"seen","args":{"seq":<highest id read>}}) so the fresh session does not replay the request, then request resident_memory action reset and end this turn. Do not create DONE.`,
-		`6. Now clear only what you handled: mcp__aif({"tool":"seen","args":{"seq":<highest message id handled>}}). That id is the highest one you read and either replied to or owed no reply. Never pass seq 0 (it clears the whole forum) and never an id above what you read. If a reply is still owed, clear only up to the id just below the oldest owed message. If nothing was owed, you may skip this step: an unread inbox is re-read next turn.`,
+		`6. Now clear only what you handled: mcp__aif({"tool":"seen","args":{"seq":<highest message id handled>}}). That id is the highest one you read and either replied to or owed no reply. Never pass seq 0 (it clears the whole forum) and never an id above what you read. If a reply is still owed, clear only up to the id just below the oldest owed message. Clear even when nothing was owed: the supervisor wakes you for unread messages, so one left unread is a wasted turn.`,
 		"7. Call resident_inbox action read. Handle the returned local messages, acknowledging each ID with action ack only after handling it. Unacknowledged messages will be delivered again, so check for already-completed actions before repeating them. If a local message is exactly RESET, acknowledge it, request resident_memory action reset, and end the turn. Read further batches only as needed for this bounded turn.",
 		"8. Read GOAL.md and the bounded journal.md in your control directory as needed to recover state. Continue the existing conversation; do not reread unchanged domain documents merely because a new turn started. Advance the goal by one bounded, verifiable step as your role describes.",
 		"9. When working state changes, use resident_memory action journal to REPLACE the working summary (maximum 16 KiB). Keep the current objective, important decisions and evidence pointers, completed message IDs needed for deduplication, blockers and next step. Remove obsolete details; do not append a turn-by-turn history. Then end the turn.",

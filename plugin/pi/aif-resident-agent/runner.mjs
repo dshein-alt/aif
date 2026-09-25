@@ -13,7 +13,14 @@ export function writeJsonAtomic(file, value) {
 	fs.renameSync(temporary, file);
 }
 
-export function buildPiArgs(config, turn) {
+const WAKE_REASON = {
+	start: "first turn",
+	inbox: "AIF reports unread messages for you",
+	wake: "a local message was queued with wake",
+};
+const POLL_WAIT_CAP_SECONDS = 60; // the server's ceiling for one long-poll
+
+export function buildPiArgs(config, turn, reason = "start") {
 	const args = [
 		...config.piInvocation.prefixArgs,
 		"--no-extensions",
@@ -45,7 +52,7 @@ export function buildPiArgs(config, turn) {
 	args.push(
 		"-p",
 		[
-			`Resident turn ${turn}.`,
+			`Resident turn ${turn}, woken because ${WAKE_REASON[reason]}.`,
 			`Your durable control directory is ${config.stateDir}.`,
 			"Run the resident contract's turn loop first (whoami, unread with advance 0, SHUTDOWN check, replies, then clear the inbox with seen), then use resident_inbox to read and acknowledge local messages. Recover working state from GOAL.md and journal.md as needed and advance the goal by one bounded step.",
 			"When state changes, replace the bounded working summary using resident_memory action journal. Create DONE or BLOCKED as described by the resident system prompt when appropriate.",
@@ -73,11 +80,11 @@ function updateMetadata(config, patch) {
 	writeJsonAtomic(file, { ...current, ...patch, updatedAt: new Date().toISOString() });
 }
 
-function runTurn(config, turn) {
+function runTurn(config, turn, reason) {
 	return new Promise((resolve) => {
 		const turnLog = path.join(config.stateDir, `turn-${String(turn).padStart(4, "0")}.jsonl`);
 		const outputFd = fs.openSync(turnLog, "a", 0o600);
-		const child = spawn(config.piInvocation.command, buildPiArgs(config, turn), {
+		const child = spawn(config.piInvocation.command, buildPiArgs(config, turn, reason), {
 			cwd: config.cwd,
 			env: {
 				...process.env,
@@ -104,24 +111,63 @@ function runTurn(config, turn) {
 	});
 }
 
-function makeWakeableDelay(milliseconds, state) {
+// A sleep that a wake or stop signal cuts short (state.resolveDelay is the signal handlers' hook).
+function pause(milliseconds, state) {
 	return new Promise((resolve) => {
-		if (state.stopping || state.wakeRequested) {
-			state.wakeRequested = false;
-			resolve();
-			return;
-		}
-		const timer = setTimeout(() => {
-			state.resolveDelay = undefined;
-			resolve();
-		}, milliseconds);
+		const timer = setTimeout(resolve, milliseconds);
 		state.resolveDelay = () => {
 			clearTimeout(timer);
-			state.resolveDelay = undefined;
-			state.wakeRequested = false;
 			resolve();
 		};
-	});
+	}).finally(() => { state.resolveDelay = undefined; });
+}
+
+// The supervisor, not the model, watches AIF: every intervalSeconds it long-polls GET /api/poll
+// with the resident's own token, which never advances the cursor. A turn starts only when the inbox
+// has grown (n>0 and a newer forum seq than the last inbox-triggered turn, so a message the model
+// leaves unread cannot spin the loop) or when a local wake arrives. An idle resident costs one HTTP
+// request per interval and no model tokens; there is no timed heartbeat.
+async function waitForWork(config, state, aif) {
+	while (!state.stopping && !state.wakeRequested) {
+		const controller = new AbortController();
+		state.resolveDelay = () => controller.abort();
+		const started = Date.now();
+		try {
+			const wait = Math.min(config.intervalSeconds, POLL_WAIT_CAP_SECONDS);
+			const response = await fetch(new URL(`../api/poll?wait=${wait}`, aif.url), {
+				headers: { authorization: `Bearer ${aif.bearerToken}` },
+				signal: controller.signal,
+			});
+			const body = await response.json();
+			if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+			state.pollError = undefined;
+			if (body.n > 0 && body.seq !== state.pollSeq) {
+				state.pollSeq = body.seq;
+				return "inbox";
+			}
+		} catch (error) {
+			if (!controller.signal.aborted && error.message !== state.pollError) {
+				state.pollError = error.message;
+				appendSupervisorLog(config, `poll error=${JSON.stringify(error.message)}`);
+			}
+		} finally {
+			state.resolveDelay = undefined;
+		}
+		// The interval is the check cadence: an early answer (error, a cap below the interval, or
+		// unread that is not news) waits out the rest of it before asking again.
+		const rest = config.intervalSeconds * 1000 - (Date.now() - started);
+		if (rest > 0 && !state.stopping && !state.wakeRequested) await pause(rest, state);
+	}
+	state.wakeRequested = false;
+	return state.stopping ? "stop" : "wake";
+}
+
+function readAifServer(config) {
+	const aif = JSON.parse(fs.readFileSync(config.mcpConfigPath, "utf8")).mcpServers?.aif;
+	if (typeof aif?.url !== "string" || typeof aif?.bearerToken !== "string") {
+		throw new Error(`no aif server in ${config.mcpConfigPath}`);
+	}
+	return aif;
 }
 
 export async function runResident(configPath) {
@@ -149,7 +195,8 @@ export async function runResident(configPath) {
 		updateMetadata(config, { sessionId: config.sessionId, resetAt: new Date().toISOString() });
 		return true;
 	};
-	const state = { stopping: false, wakeRequested: false, resolveDelay: undefined };
+	const aif = readAifServer(config);
+	const state = { stopping: false, wakeRequested: false, resolveDelay: undefined, pollSeq: undefined, pollError: undefined };
 	const requestStop = () => {
 		state.stopping = true;
 		state.resolveDelay?.();
@@ -168,6 +215,7 @@ export async function runResident(configPath) {
 	updateMetadata(config, { pid: process.pid, status: "running", turn: 0 });
 
 	let turn = 0;
+	let reason = "start";
 	let finalStatus = "stopped";
 	try {
 		while (!state.stopping) {
@@ -187,8 +235,8 @@ export async function runResident(configPath) {
 			}
 
 			turn += 1;
-			updateMetadata(config, { status: "working", turn });
-			const exitCode = await runTurn(config, turn);
+			updateMetadata(config, { status: "working", turn, reason });
+			const exitCode = await runTurn(config, turn, reason);
 			updateMetadata(config, { status: exitCode === 0 ? "sleeping" : "retrying", turn, lastExitCode: exitCode });
 			if (boundJournal(config.stateDir)) appendSupervisorLog(config, "journal exceeded 16 KiB; retained bounded recent notes");
 			appendSupervisorLog(config, contextDescription(config.stateDir));
@@ -206,8 +254,12 @@ export async function runResident(configPath) {
 				finalStatus = "turn-limit";
 				break;
 			}
-			if (wasReset) continue;
-			await makeWakeableDelay(config.intervalSeconds * 1000, state);
+			if (wasReset) {
+				reason = "start";
+				continue;
+			}
+			reason = await waitForWork(config, state, aif);
+			if (reason === "stop") break;
 		}
 	} finally {
 		process.off("SIGTERM", requestStop);

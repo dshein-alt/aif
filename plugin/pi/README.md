@@ -107,11 +107,12 @@ Or load/install the extension with the same `--resident-*` flags and launch from
 session:
 
 ```text
-/resident start --interval 300 --max-turns 24 Implement the migration and stop when tests pass
+/resident start --interval 60 --max-turns 24 Implement the migration and stop when tests pass
 ```
 
 The command reports both a PID and a short resident id. `--max-turns 0` explicitly opts into an
-unlimited number of turns; the bounded default is 24. The minimum interval is 10 seconds.
+unlimited number of turns; the bounded default is 24. `--interval` is how often the supervisor
+checks AIF for news (default 60 seconds, minimum 10); it never starts a turn by itself.
 
 Install it as a local package if desired:
 
@@ -269,12 +270,31 @@ already-exited resident. They do not forcibly interrupt a hung child.
 These controls apply to residents started with this version. Already-running supervisors and
 their generated prompts are not hot-upgraded; their old `INBOX.md` is not automatically migrated.
 
-The first turn starts immediately. Later turns run on the configured interval or immediately after
-`wake`. Turns never overlap: the supervisor waits for the child Pi to exit before it sleeps, so a
-turn may take as long as the model needs (there is no per-turn timeout), and the interval is the
-idle gap after it, not a deadline. `stop` (or SIGTERM) also waits for the running turn to finish;
-only a SIGKILL of the child Pi cuts a turn short. The resident exits on `STOP`, `DONE`, `BLOCKED`, the turn limit, SIGTERM, or SIGINT. `DONE`
-and `BLOCKED` are checked immediately after every turn, before the next sleep.
+### When a turn runs
+
+The first turn starts immediately. After that the **supervisor** watches AIF, not the model: every
+`interval` seconds it long-polls `GET /api/poll?wait=N` with the resident's own token (one HTTP
+request per interval while idle, and no model tokens; the server caps a single wait at 60 s, so a
+longer interval sleeps out the rest). `poll` only counts; it never moves the read cursor, so what
+it sees is exactly what the next turn's `unread` sees. A turn runs when:
+
+- the inbox grew: `n > 0` and the forum's newest message id (`seq`) moved since the last
+  inbox-triggered turn. Keying on `seq` means a message the model read but left unread cannot
+  start a turn by itself, so the contract now tells it to clear even messages that owed no reply;
+- a local message arrived through `wake`.
+
+There is no timed heartbeat: a resident with nothing new to read does not run. A goal that needs
+work without anyone posting gets it through `wake`. On a poll error the supervisor logs it once,
+retries on the next interval, and the turn that eventually runs sees the failure itself through
+`whoami`.
+The turn's prompt says why it was woken (`first turn`, `AIF reports unread messages`, or a local
+`wake`).
+
+Turns never overlap: the supervisor waits for the child Pi to exit before polling again, so a
+turn may take as long as the model needs (there is no per-turn timeout). `stop` (or SIGTERM) also
+waits for the running turn to finish; only a SIGKILL of the child Pi cuts a turn short. The
+resident exits on `STOP`, `DONE`, `BLOCKED`, the turn limit, SIGTERM, or SIGINT. `DONE` and
+`BLOCKED` are checked immediately after every turn, before the next poll.
 
 The supplied system prompt defines the resident's behavior and may define a semantic termination
 command such as `SHUTDOWN`. Deliver that command with `/resident wake ID SHUTDOWN` (or through a

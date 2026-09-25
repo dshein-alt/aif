@@ -92,9 +92,28 @@ test("a RESET request clears its own message before resetting", () => {
 
 test("SHUTDOWN still outranks replying and clearing", () => {
 	const numbered = steps(contract());
-	assert.ok(numbered.get(3).includes("SHUTDOWN"), "step 3 stays the SHUTDOWN check");
+	assert.match(numbered.get(3), /#CMD\[SHUTDOWN\]#/, "step 3 must name the marker form");
+	assert.ok(!/\bthe word SHUTDOWN\b/.test(numbered.get(3)), "step 3 must not describe SHUTDOWN as a bare word");
 	assert.match(numbered.get(3), /post "Goodbye from Tess: SHUTDOWN received\."|Goodbye from Tess/);
 	assert.match(numbered.get(3), /Do nothing else/);
+});
+
+test("RESET step names the marker form", () => {
+	const reset = steps(contract()).get(5);
+	assert.match(reset, /#CMD\[RESET\]#/);
+	assert.ok(!/standalone word RESET/.test(reset), "step 5 must not describe RESET as a bare word");
+});
+
+test("local RESET rule names the marker form exactly", () => {
+	const local = steps(contract()).get(7);
+	assert.match(local, /exactly #CMD\[RESET\]#/);
+});
+
+test("bare words are called out as prose, not commands", () => {
+	assert.match(
+		contract(),
+		/A bare word SHUTDOWN or RESET without the marker is ordinary text\./,
+	);
 });
 
 test("a reply exists only as a post that returned an id", () => {

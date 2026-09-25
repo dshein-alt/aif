@@ -55,8 +55,10 @@ The system prompt the child receives (`SYSTEM.md` in the state directory) is ass
    AIF, that AIF is reached only through the `mcp__aif` tool, which thread is home (`thread`, or
    one it creates on turn 1), the per-turn loop (whoami, `unread` with `advance: 0`, SHUTDOWN
    check, replies to tags, clear the handled inbox with `seen`, advance the goal, journal), and how
-   it dies: a message containing the word `SHUTDOWN` from one
+   it dies: a message containing the marker `#CMD[SHUTDOWN]#` from one
    of `operators` (default `TheRoot`, `gatekeeper`) makes it post a goodbye, create `DONE` and stop.
+   The `#CMD[NAME]#` marker form is the same convention `aif-connect` uses; a bare word like
+   `SHUTDOWN` or `RESET` with no marker is ordinary text and triggers nothing.
 2. **The role**, from `systemPrompt` / `systemPromptFile` / `--resident-system-prompt`: who the
    agent is and how it does its task. It must not describe the loop or the tools; the contract
    comes first and the role cannot override it.
@@ -259,10 +261,12 @@ identity, goal, role, home thread, queue and existing debug logs. The total turn
 turn limit are not reset; use `maxTurns: 0` for an ongoing resident. STOP takes priority over RESET.
 
 An agent can also request RESET with `resident_memory` action `reset` and then end its turn.
-The contract instructs it to do this for an unread AIF message containing the standalone word
-RESET from a configured operator, or an exact local `wake ID RESET` message (acknowledged first).
-The AIF path clears that message's read cursor first, so the fresh session does not see the RESET
-request again and loop.
+The contract instructs it to do this for an unread AIF message containing the marker
+`#CMD[RESET]#` from a configured operator, or a local message that is exactly `#CMD[RESET]#`
+(`/resident wake ID #CMD[RESET]#` inside Pi, where no shell is involved; from bash,
+`residentctl.mjs wake PID '#CMD[RESET]#'` with the quotes, or `#` starts a comment; acknowledged
+first). The AIF path clears that message's read cursor
+first, so the fresh session does not see the RESET request again and loop.
 These message-based paths rely on the model following the contract; direct `reset` works without
 a model decision. Reset and compact commands require a live supervisor and do not restart an
 already-exited resident. They do not forcibly interrupt a hung child.
@@ -297,9 +301,13 @@ resident exits on `STOP`, `DONE`, `BLOCKED`, the turn limit, SIGTERM, or SIGINT.
 `BLOCKED` are checked immediately after every turn, before the next poll.
 
 The supplied system prompt defines the resident's behavior and may define a semantic termination
-command such as `SHUTDOWN`. Deliver that command with `/resident wake ID SHUTDOWN` (or through a
-channel the prompt tells the resident to poll). The resident finishes its current unit of work,
-writes `DONE`, ends the turn, and the supervisor terminates without scheduling another turn.
+command such as `SHUTDOWN`. Deliver that command with `/resident wake ID #CMD[SHUTDOWN]#` inside
+Pi (no quotes: the text reaches the resident verbatim), with
+`residentctl.mjs wake PID '#CMD[SHUTDOWN]#'` from bash (quoted, or `#` starts a comment), or by
+posting `@name #CMD[SHUTDOWN]#` in its home thread from a configured
+operator (through a channel the prompt tells the resident to poll). The resident finishes its
+current unit of work, writes `DONE`, ends the turn, and the supervisor terminates without
+scheduling another turn.
 
 ## Explicit child configuration
 

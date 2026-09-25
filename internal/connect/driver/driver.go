@@ -22,7 +22,9 @@ import (
 //     from that process, so a restart never sees a stale Exit, Text or TurnEnd. If ctx ends
 //     first, Stop kills the process and returns ctx.Err(); that process's remaining events,
 //     its Exit last, then still arrive on Events() and must be read before Start.
+//   - Stop after the process's Exit was already delivered returns at once, doing cleanup only.
 //   - The Exit of a process that Stop ended carries no Err: a deliberate stop is not a failure.
+//   - Text may arrive in chunks; the consumer coalesces.
 type Driver interface {
 	Preflight(bin string) error                     // checks the harness binary can be used (pi: its MCP adapter is installed); no-op for most
 	Start(ctx context.Context, launch Launch) error // spawn, initialize, resume session if any

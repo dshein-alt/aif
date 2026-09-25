@@ -23,6 +23,14 @@ var (
 	okStep   step = func(*env) ([]driver.Event, error) { return []driver.Event{{Kind: driver.TurnEnd, OK: true}}, nil }
 	hangStep step = func(*env) ([]driver.Event, error) { return nil, nil }
 	dieStep  step = func(*env) ([]driver.Event, error) { return []driver.Event{{Kind: driver.Exit}}, nil }
+	// blockStep is a Prompt stuck writing to a harness that does not read its stdin: only Stop frees it.
+	blockStep step = func(e *env) ([]driver.Event, error) {
+		e.drv.mu.Lock()
+		halt := e.drv.halt
+		e.drv.mu.Unlock()
+		<-halt
+		return nil, errors.New("write |1: broken pipe")
+	}
 )
 
 func errStep(msg string) step {
@@ -38,6 +46,7 @@ type fakeDriver struct {
 	e          *env
 	mu         sync.Mutex
 	ch         chan driver.Event
+	halt       chan struct{} // closed by Stop
 	id         string
 	ids        []string // SessionID after each Start; default: resume, else "sess-<n>"
 	launches   []driver.Launch
@@ -58,7 +67,7 @@ func (f *fakeDriver) Start(_ context.Context, l driver.Launch) error {
 		return f.startErr
 	}
 	f.launches = append(f.launches, l)
-	f.ch = make(chan driver.Event, 64)
+	f.ch, f.halt = make(chan driver.Event, 64), make(chan struct{})
 	switch {
 	case len(f.ids) > 0:
 		f.id, f.ids = f.ids[0], f.ids[1:]
@@ -96,9 +105,19 @@ func (f *fakeDriver) Stop(context.Context) error {
 	f.e.rec("stop")
 	f.mu.Lock()
 	f.stops++
+	ch, halt := f.ch, f.halt
+	f.halt = nil
 	f.mu.Unlock()
-	f.emit(driver.Event{Kind: driver.Exit})
-	return nil
+	if halt != nil {
+		close(halt)
+	}
+	for { // the contract: Stop drains the process's events, its Exit included
+		select {
+		case <-ch:
+		default:
+			return nil
+		}
+	}
 }
 func (f *fakeDriver) ToolHint() string             { return "HINT" }
 func (f *fakeDriver) HasSystemPromptChannel() bool { return f.sysChannel }
@@ -178,12 +197,13 @@ type env struct {
 	drv  *fakeDriver
 	idle chan struct{}
 
-	mu     sync.Mutex
-	calls  []string
-	logs   []string
-	h      Handler
-	clock  time.Time
-	sleeps []time.Duration
+	mu      sync.Mutex
+	calls   []string
+	logs    []string
+	h       Handler
+	clock   time.Time
+	sleeps  []time.Duration
+	onSleep func(ctx context.Context) // runs in Sleep; nil returns at once
 }
 
 func newEnv(t *testing.T) *env {
@@ -246,7 +266,11 @@ func (e *env) deps() Deps {
 			e.mu.Lock()
 			e.sleeps = append(e.sleeps, d)
 			e.clock = e.clock.Add(d)
+			f := e.onSleep
 			e.mu.Unlock()
+			if f != nil {
+				f(ctx)
+			}
 		},
 	}
 }
@@ -426,8 +450,9 @@ func TestPollGate(t *testing.T) {
 	e := newEnv(t)
 	e.seed(&State{LastControl: 100})
 	e.aif.polls = []pollFn{
-		ans(1, 100), // news: inbox turn
-		ans(1, 100), // same seq: no turn, waits out the interval
+		ans(1, 100), // the start turn read the inbox up to the startup scan's seq: no turn
+		ans(1, 101), // news: inbox turn
+		ans(1, 101), // same seq: no turn, waits out the interval
 		func(_ context.Context, e *env) (int, int64, error) {
 			e.advance(20 * time.Second)
 			return 0, 0, errors.New("boom")
@@ -436,7 +461,7 @@ func TestPollGate(t *testing.T) {
 			e.advance(20 * time.Second)
 			return 0, 0, errors.New("boom")
 		},
-		ans(1, 101), // moved: inbox turn
+		ans(1, 102), // moved: inbox turn
 	}
 	e.drv.steps = []step{okStep, okStep, stopStep(okStep)}
 	e.wantCode(e.run(nil), 0)
@@ -444,7 +469,7 @@ func TestPollGate(t *testing.T) {
 	if len(ps) != 3 || !strings.Contains(ps[1], "woken because "+reasonText[ReasonInbox]) {
 		t.Fatalf("prompts %q", ps)
 	}
-	if want := []time.Duration{time.Minute, 40 * time.Second, 40 * time.Second}; !slices.Equal(e.sleeps, want) {
+	if want := []time.Duration{time.Minute, time.Minute, 40 * time.Second, 40 * time.Second}; !slices.Equal(e.sleeps, want) {
 		t.Errorf("sleeps %v, want %v", e.sleeps, want)
 	}
 	if n := strings.Count(strings.Join(e.logLines(), "\n"), "poll error: boom"); n != 1 {
@@ -568,7 +593,7 @@ func TestTurnTimeout(t *testing.T) {
 	}
 	e.wantLog("turn=1 timeout after 20ms")
 	e.wantLog("turn keeps failing: timeout after 20ms")
-	if e.drv.stops != 3 || len(e.drv.launches) != 3 {
+	if e.drv.stops != 4 || len(e.drv.launches) != 3 { // the fatal exit stops the dead harness too: its cleanup
 		t.Errorf("stops %d launches %d: want each timed-out harness killed and restarted", e.drv.stops, len(e.drv.launches))
 	}
 	for i, l := range e.drv.launches {
@@ -825,4 +850,154 @@ func TestIdleDeathBudget(t *testing.T) {
 	e.aif.polls = []pollFn{die, die, die}
 	e.wantCode(e.run(nil), 4)
 	e.wantLog("harness keeps dying")
+	if e.drv.stops != 1 {
+		t.Errorf("harness stopped %d times: the fatal exit must stop the dead harness once, for its cleanup", e.drv.stops)
+	}
+}
+
+// ---- review follow-ups ----
+
+// A failed state write after a clean scan is logged and never counts toward the scan hold.
+func TestSaveFailureNonFatal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	e := newEnv(t)
+	e.seed(&State{Session: "s1", Agent: "pi"})
+	t.Cleanup(func() { os.Chmod(e.dir(), 0o700) })
+	next := func(since int64) ([]Message, int64, error) { return nil, since + 1, nil } // every scan saves
+	e.aif.feeds = []feedFn{next, next, next, next, next}
+	e.aif.polls = []pollFn{ans(1, 100), ans(1, 200)}
+	readOnly := func(e *env) { os.Chmod(e.dir(), 0o500) }
+	e.drv.steps = []step{then(readOnly, okStep), okStep, stopStep(okStep)}
+	e.wantCode(e.run(nil), 0)
+	if n := len(e.prompts()); n != 3 {
+		t.Errorf("%d prompts, want 3: the failed saves after clean scans held the turns", n)
+	}
+	e.wantLog("state: ")
+	if e.logged("scan error") || e.logged("held") {
+		t.Errorf("a failed save counted as a failed scan; log:\n%s", strings.Join(e.logLines(), "\n"))
+	}
+}
+
+// A local SHUTDOWN queued while scans are held ends the idle wait at once: no rest-of-interval sleep.
+func TestLocalShutdownViaWakeDuringHold(t *testing.T) {
+	e := newEnv(t)
+	e.seed(&State{Session: "s1", Agent: "pi", LastControl: 5})
+	fail := func(int64) ([]Message, int64, error) { return nil, 0, ErrUnreachable }
+	e.aif.feeds = []feedFn{fail, fail, fail}
+	e.aif.polls = []pollFn{ans(1, 6)} // the third failed scan: held
+	go func() {
+		<-e.idle
+		e.call(Request{Op: "wake", Text: "#CMD[SHUTDOWN]#"})
+	}()
+	e.wantCode(e.run(nil), 0)
+	if ps := e.prompts(); len(ps) != 2 || !strings.Contains(ps[1], "SHUTDOWN received from a local operator") {
+		t.Fatalf("prompts %q", ps)
+	}
+	if want := []time.Duration{time.Minute}; !slices.Equal(e.sleeps, want) {
+		t.Errorf("sleeps %v, want %v: the local command must skip the rest of the interval", e.sleeps, want)
+	}
+	if st := e.state(); st.Shutdown != nil || len(st.Wake) != 0 {
+		t.Errorf("state %+v", st)
+	}
+	e.wantLog("new turns held")
+	e.wantLog("control=SHUTDOWN from=local")
+}
+
+func TestResetFoundWhileIdle(t *testing.T) {
+	e := newEnv(t)
+	e.seed(&State{Session: "s1", Agent: "pi", LastControl: 5})
+	e.aif.polls = []pollFn{ans(0, 7)} // past lastControl: scan
+	e.aif.feeds = []feedFn{nil, nil, batch(7, msg(7, "root", "#CMD[RESET]#"))}
+	e.drv.steps = []step{okStep, stopStep(okStep)}
+	e.wantCode(e.run(nil), 0)
+	ps := e.prompts()
+	if len(ps) != 2 || !strings.Contains(ps[1], "reset by root (message 7)") {
+		t.Fatalf("prompts %q", ps)
+	}
+	if len(e.drv.launches) != 2 || e.drv.launches[1].SessionID != "" {
+		t.Errorf("launches %+v: want a restart on a fresh session", e.drv.launches)
+	}
+	if st := e.state(); st.LastControl != 7 || st.Session != "sess-2" {
+		t.Errorf("state %+v", st)
+	}
+	e.wantLog("control=RESET from=root msg=7")
+}
+
+func TestSigtermWhileSleeping(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e := newEnv(t)
+	e.seed(&State{Session: "s1", Agent: "pi"})
+	e.aif.polls = []pollFn{ans(0, 0)}
+	e.onSleep = func(ctx context.Context) { cancel(); <-ctx.Done() }
+	e.wantCode(e.run(ctx), 0)
+	if len(e.prompts()) != 1 || e.drv.stops != 1 || len(e.sleeps) != 1 {
+		t.Errorf("prompts %d stops %d sleeps %v", len(e.prompts()), e.drv.stops, e.sleeps)
+	}
+	e.wantLog("stopped")
+}
+
+func TestShutdownTurnTimeout(t *testing.T) {
+	e := newEnv(t)
+	e.seed(&State{Session: "s1", Agent: "pi", Shutdown: &Ref{From: "root", Msg: 4}})
+	e.cfg.TurnTimeout = 20 * time.Millisecond
+	e.drv.steps = []step{hangStep}
+	e.wantCode(e.run(nil), 0)
+	e.wantLog("turn=1 timeout after 20ms")
+	e.wantLog("outcome=cancelled")
+	if len(e.prompts()) != 1 || len(e.drv.launches) != 1 || e.state().Shutdown != nil {
+		t.Errorf("prompts %d launches %d shutdown %+v", len(e.prompts()), len(e.drv.launches), e.state().Shutdown)
+	}
+}
+
+func TestStatusMidTurn(t *testing.T) {
+	e := newEnv(t)
+	e.seed(&State{})
+	var st *Status
+	e.drv.steps = []step{then(func(e *env) { st = e.call(Request{Op: "status"}).Status }, stopStep(okStep))}
+	e.wantCode(e.run(nil), 0)
+	if st == nil || st.State != "turn" || st.Reason != "start" || st.Turn != 1 {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// A Prompt blocked on a harness that stopped reading its stdin still times out; the kill frees it.
+func TestBlockedPrompt(t *testing.T) {
+	e := newEnv(t)
+	e.seed(&State{Session: "s1", Agent: "pi"})
+	e.cfg.TurnTimeout = 20 * time.Millisecond
+	e.drv.steps = []step{blockStep, stopStep(okStep)}
+	e.wantCode(e.run(nil), 0)
+	if ps := e.prompts(); len(ps) != 2 || !strings.Contains(ps[1], RecoverTimeout) {
+		t.Fatalf("prompts %q", ps)
+	}
+	e.wantLog(`cause="timeout after 20ms"`)
+	if len(e.drv.launches) != 2 {
+		t.Errorf("launches %d: want the harness restarted", len(e.drv.launches))
+	}
+}
+
+func TestTextCoalesced(t *testing.T) {
+	e := newEnv(t)
+	e.seed(&State{})
+	e.drv.steps = []step{stopStep(func(*env) ([]driver.Event, error) {
+		return []driver.Event{
+			{Kind: driver.Text, Text: "Hel"}, {Kind: driver.Text, Text: "lo, wor"}, {Kind: driver.Text, Text: "ld!\n\n  Done"},
+			{Kind: driver.ToolCall, Text: "mcp__aif post"},
+			{Kind: driver.Text, Text: "bye"},
+			{Kind: driver.TurnEnd, OK: true},
+		}, nil
+	})}
+	e.wantCode(e.run(nil), 0)
+	var got []string
+	for _, l := range e.logLines() {
+		if strings.HasPrefix(l, "model: ") || strings.HasPrefix(l, "tool: ") {
+			got = append(got, l)
+		}
+	}
+	if want := []string{"model: Hello, world! Done", "tool: mcp__aif post", "model: bye"}; !slices.Equal(got, want) {
+		t.Errorf("log %q, want %q", got, want)
+	}
 }

@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -93,7 +94,7 @@ func LocalScan(st *State) (*Pending, error) {
 // whole or an error) and runs Scan over it. A hit is recorded as st.Pending, the first write, and
 // returned; the caller executes it and calls Commit. A clean scan without a hit advances
 // LastControl to the reply's seq. A feed error changes nothing and returns (nil, nil, err); a
-// failed Save is returned with whatever was found.
+// failed Save, a saveError, is returned with whatever the scan (which succeeded) found.
 func RunScan(ctx context.Context, feed func(context.Context, int64) ([]Message, int64, error), st *State, cfg Config) (*Pending, []string, error) {
 	st.Lock()
 	since := st.LastControl
@@ -107,13 +108,25 @@ func RunScan(ctx context.Context, feed func(context.Context, int64) ([]Message, 
 	defer st.Unlock()
 	if hit != nil {
 		st.Pending = &Pending{Action: hit.Action, From: hit.From, Msg: hit.ID}
-		return st.Pending, unknown, st.Save()
+		return st.Pending, unknown, saved(st.Save())
 	}
 	if seq <= st.LastControl {
 		return nil, unknown, nil
 	}
 	st.LastControl = seq
-	return nil, unknown, st.Save()
+	return nil, unknown, saved(st.Save())
+}
+
+// saveError is a failed State.Save after a scan that succeeded: it is no failed scan.
+type saveError struct{ error }
+
+func (e saveError) Unwrap() error { return e.error }
+
+func saved(err error) error {
+	if err != nil {
+		return saveError{err}
+	}
+	return nil
 }
 
 // Commit is the second write: it applies st.Pending's effect and clears it in one Save. A forum
@@ -161,15 +174,20 @@ func (l *loop) commands(forum bool) Reason {
 			for _, u := range unknown {
 				l.logf("unknown command %s ignored", u)
 			}
-			if p == nil {
-				l.scanned(err)
-				forum = false
+			if err != nil && !errors.As(err, new(saveError)) {
+				l.scanned(err) // the feed failed: nothing found, nothing changed
 				err = nil
 			} else {
 				l.scanned(nil)
 			}
+			if p == nil {
+				forum = false
+			}
 		}
-		if err != nil { // a failed Save; the command still runs
+		// A failed Save is logged, not fatal, and the command still runs: every Save writes the
+		// whole struct, so the next one that succeeds carries this commit too, and a crash before
+		// then replays at most this command, a repeated RESET or goodbye the spec tolerates.
+		if err != nil {
 			l.logf("state: %v", err)
 		}
 		if p == nil {

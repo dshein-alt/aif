@@ -1,9 +1,90 @@
 package connect
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"testing"
 )
+
+func newScanState(t *testing.T, st *State) *State {
+	t.Helper()
+	st.dir, st.Origin = t.TempDir(), "http://x:80"
+	return st
+}
+
+func reload(t *testing.T, st *State) *State {
+	t.Helper()
+	s, _, err := LoadState(st.dir, st.Origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func feedOf(ms []Message, seq int64, err error) func(context.Context, int64) ([]Message, int64, error) {
+	return func(context.Context, int64) ([]Message, int64, error) { return ms, seq, err }
+}
+
+func TestRunScanBookkeeping(t *testing.T) {
+	cfg := Config{Thread: 3, AgentName: "mybot", Operators: []string{"root"}}
+	ctx := context.Background()
+
+	// clean: the cursor moves to the reply's seq, even past messages the scan does not count
+	st := newScanState(t, &State{LastControl: 5})
+	p, _, err := RunScan(ctx, feedOf([]Message{{ID: 6, Thread: 3, Author: "x", Body: "#CMD[RESET]#"}}, 20, nil), st, cfg)
+	if p != nil || err != nil || reload(t, st).LastControl != 20 {
+		t.Errorf("clean scan: %+v %v", p, err)
+	}
+	// a failed feed changes nothing
+	p, _, err = RunScan(ctx, feedOf(nil, 0, ErrUnreachable), st, cfg)
+	if p != nil || !errors.Is(err, ErrUnreachable) || st.LastControl != 20 {
+		t.Errorf("failed scan: %+v %v %d", p, err, st.LastControl)
+	}
+
+	// a hit is the first write: pending recorded, the cursor untouched until the commit
+	st = newScanState(t, &State{LastControl: 5, Session: "s1"})
+	p, unknown, err := RunScan(ctx, feedOf([]Message{
+		{ID: 8, Thread: 3, Author: "root", Body: "#CMD[RESET]#"},
+		{ID: 9, Thread: 3, Author: "root", Body: "#CMD[NOPE]#"},
+		{ID: 10, Thread: 3, Author: "x", Body: "hi"},
+	}, 10, nil), st, cfg)
+	want := &Pending{Action: "RESET", From: "root", Msg: 8}
+	if err != nil || !reflect.DeepEqual(p, want) || !reflect.DeepEqual(unknown, []string{"NOPE"}) {
+		t.Fatalf("hit: %+v %v %v", p, unknown, err)
+	}
+	if got := reload(t, st); !reflect.DeepEqual(got.Pending, want) || got.LastControl != 5 || got.Session != "s1" {
+		t.Errorf("after the first write: %+v", got)
+	}
+	if err := Commit(st); err != nil {
+		t.Fatal(err)
+	}
+	got := reload(t, st)
+	if got.Pending != nil || got.LastControl != 8 || got.Session != "" || !reflect.DeepEqual(got.FreshSession, &Ref{From: "root", Msg: 8}) {
+		t.Errorf("after the commit: %+v", got)
+	}
+}
+
+func TestLocalCommand(t *testing.T) {
+	st := newScanState(t, &State{LastControl: 7, Wake: []Wake{{ID: "a", Text: "hi"}, {ID: "b", Text: "#CMD[SHUTDOWN]# "}, {ID: "c", Text: "#CMD[SHUTDOWN]#"}}})
+	if got := promptWake(st.Wake); len(got) != 2 || got[1].ID != "b" {
+		t.Errorf("promptWake %+v: only an exact marker is a command", got)
+	}
+	p, err := LocalScan(st)
+	if err != nil || !reflect.DeepEqual(p, &Pending{Action: "SHUTDOWN", From: "local", Local: "c"}) {
+		t.Fatalf("LocalScan %+v %v", p, err)
+	}
+	if err := Commit(st); err != nil {
+		t.Fatal(err)
+	}
+	got := reload(t, st)
+	if got.Pending != nil || got.LastControl != 7 || len(got.Wake) != 2 || !reflect.DeepEqual(got.Shutdown, &Ref{From: "local"}) {
+		t.Errorf("after the commit: %+v", got)
+	}
+	if p, _ := LocalScan(st); p != nil {
+		t.Errorf("second LocalScan %+v", p)
+	}
+}
 
 func TestExtract(t *testing.T) {
 	cases := map[string][]Command{

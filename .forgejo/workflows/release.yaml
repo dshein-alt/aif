@@ -3,7 +3,7 @@ name: Release
 # A release tag (v1.2.3, v1.2.3-rc1, ...) builds aif-connect for linux/amd64 and publishes the binary
 # plus SHA256SUMS to the repository owner's generic package registry: package aif-connect, version =
 # the tag. Nothing else publishes. The publish token is the PKG_PUBLISH_TOKEN secret set on the
-# repository. Generic packages of a public repository download without a token:
+# repository. Generic packages of a public owner download without a token:
 #   curl -O $GITHUB_SERVER_URL/api/packages/<owner>/generic/aif-connect/<tag>/aif-connect-linux-amd64
 on:
   push:
@@ -44,9 +44,12 @@ jobs:
       # A tag push carries the tag in the ref, a manual run names it. The
       # branch is local and throwaway, it only keeps git off a detached HEAD.
       - name: Pick the tag
+        env:
+          # Through env, not spliced into the script: the input is user text.
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           git config --global --add safe.directory "$PWD"
-          tag="${{ github.event.inputs.tag }}"
+          tag="$INPUT_TAG"
           tag=${tag:-${GITHUB_REF#refs/tags/}}
           # A manual run picks the workflow from a branch, so the ref names no
           # tag: without the input there is nothing to build.
@@ -59,7 +62,9 @@ jobs:
           echo "TAG=$tag" >> "$GITHUB_ENV"
 
       - name: Build
-        run: GIT_SHA=$(git rev-parse --short "$TAG") sh scripts/dist.sh linux/amd64
+        # HEAD is ci-build = the tag's commit. "$TAG" itself would name the tag
+        # object for an annotated tag, and every tag here is annotated.
+        run: GIT_SHA=$(git rev-parse --short HEAD) sh scripts/dist.sh linux/amd64
 
       # The binary stays reachable from the run even when the upload fails.
       - uses: actions/upload-artifact@v3

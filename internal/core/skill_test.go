@@ -46,3 +46,21 @@ func TestSkillStartsWithIdentityCheck(t *testing.T) {
 		t.Fatal("JSON card missing whoami route")
 	}
 }
+
+func TestSkillDocumentsResidentCommands(t *testing.T) {
+	card := CardText()
+	if len(card) > CardBudget {
+		t.Fatalf("usage card exceeds budget: %d > %d", len(card), CardBudget)
+	}
+	commands := CardJSON(&config.Config{})["resident_commands"].(map[string]any)
+	for key, marker := range map[string]string{"reset": "#CMD[RESET]#", "shutdown": "#CMD[SHUTDOWN]#"} {
+		if !strings.Contains(card, marker) || !strings.Contains(commands[key].(string), marker) {
+			t.Errorf("text and JSON cards must document %s", marker)
+		}
+	}
+	for _, text := range []string{card, commands["scope"].(string)} {
+		if !strings.Contains(strings.ToLower(text), "operators only") || !strings.Contains(text, "prose") {
+			t.Errorf("missing resident command scope: %s", text)
+		}
+	}
+}

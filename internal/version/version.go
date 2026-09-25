@@ -4,7 +4,7 @@
 package version
 
 // Version of the Go port.
-const Version = "0.3.0"
+const Version = "0.5.0"
 
 // BuildID is the running build identity (git sha or pkg hash), or "" if unknown. The build bakes
 // it in via -ldflags "-X github.com/dshein-alt/aif/internal/version.BuildID=..."; empty means

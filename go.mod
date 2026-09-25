@@ -6,6 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/yuin/goldmark v1.8.6
+	golang.org/x/sys v0.48.0
 )
 
 require (

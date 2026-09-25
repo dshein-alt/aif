@@ -1,14 +1,29 @@
 package connect
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+// sockDir is a short temp directory: t.TempDir() embeds the test name and can push a socket path
+// past maxSockPath.
+func sockDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
 
 // staleSocket leaves a socket file nobody listens on, as a crashed connector does.
 func staleSocket(t *testing.T, dir string) {
@@ -25,7 +40,7 @@ func staleSocket(t *testing.T, dir string) {
 }
 
 func TestControlRoundTrip(t *testing.T) {
-	dir := t.TempDir()
+	dir := sockDir(t)
 	staleSocket(t, dir) // Serve replaces it
 	var mu sync.Mutex
 	var got []Request
@@ -57,6 +72,11 @@ func TestControlRoundTrip(t *testing.T) {
 		t.Fatalf("handler saw %+v", got)
 	}
 	mu.Unlock()
+	if fi, err := os.Stat(filepath.Join(dir, "control.sock")); err != nil {
+		t.Fatal(err)
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("socket mode %v, want 0600", fi.Mode())
+	}
 
 	srv.Close()
 	if _, err := os.Stat(filepath.Join(dir, "control.sock")); !os.IsNotExist(err) {
@@ -68,7 +88,7 @@ func TestControlRoundTrip(t *testing.T) {
 }
 
 func TestControlBadRequest(t *testing.T) {
-	dir := t.TempDir()
+	dir := sockDir(t)
 	srv, err := Serve(dir, nil, func(Request) Response { t.Error("handler called"); return Response{} })
 	if err != nil {
 		t.Fatal(err)
@@ -79,17 +99,105 @@ func TestControlBadRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
 	c.Write([]byte("not json\n"))
 	b := make([]byte, 512)
-	k, _ := c.Read(b)
-	if !strings.HasPrefix(string(b[:k]), `{"ok":false,"error":`) {
-		t.Fatalf("reply %q", b[:k])
+	k, err := c.Read(b)
+	if err != nil || !strings.HasPrefix(string(b[:k]), `{"ok":false,"error":`) {
+		t.Fatalf("reply %q, %v", b[:k], err)
+	}
+}
+
+func TestControlEmptyError(t *testing.T) {
+	dir := sockDir(t)
+	srv, err := Serve(dir, nil, func(Request) Response { return Response{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	if r, err := Call(dir, Request{Op: "stop"}); err != nil || r.OK || r.Error != "request failed" {
+		t.Fatalf("reply %+v, %v", r, err)
+	}
+}
+
+func TestControlPathTooLong(t *testing.T) {
+	dir := filepath.Join(sockDir(t), strings.Repeat("x", maxSockPath))
+	_, err := Serve(dir, nil, func(Request) Response { return Response{} })
+	if err == nil || !strings.Contains(err.Error(), "control socket path too long") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestControlConcurrent runs 20 calls at once, notes and status mixed (go test -race).
+func TestControlConcurrent(t *testing.T) {
+	dir := sockDir(t)
+	notes, err := LoadNotes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := Serve(dir, notes, func(Request) Response { return Response{OK: true, Status: &Status{PID: 7}} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Go(func() {
+			req := Request{Op: "status"}
+			if i%2 == 0 {
+				req = Request{Op: "note", Action: "set", ID: fmt.Sprint("n", i), Note: "x"}
+			}
+			if r, err := Call(dir, req); err != nil || !r.OK {
+				t.Errorf("call %d: %+v, %v", i, r, err)
+			}
+		})
+	}
+	wg.Wait()
+	if got := len(notes.List()); got != 10 {
+		t.Fatalf("%d notes, want 10", got)
+	}
+}
+
+func TestControlCloseWaits(t *testing.T) {
+	dir := sockDir(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	srv, err := Serve(dir, nil, func(Request) Response {
+		close(entered)
+		<-release
+		return Response{OK: true, Text: "late"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := make(chan Response, 1)
+	go func() {
+		r, err := Call(dir, Request{Op: "wake"})
+		if err != nil {
+			t.Error(err)
+		}
+		reply <- r
+	}()
+	<-entered
+	closed := make(chan struct{})
+	go func() { srv.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned with a request in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	<-closed
+	if r := <-reply; !r.OK || r.Text != "late" {
+		t.Fatalf("in-flight reply %+v", r)
 	}
 }
 
 func TestControlNotes(t *testing.T) {
-	dir := t.TempDir()
-	notes, _ := LoadNotes(dir)
+	dir := sockDir(t)
+	notes, err := LoadNotes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv, err := Serve(dir, notes, func(Request) Response { t.Error("handler called for a note"); return Response{} })
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +252,7 @@ func fakeConnector(t *testing.T, home, name string, pid int) string {
 }
 
 func TestListAndResolve(t *testing.T) {
-	home := t.TempDir()
+	home := sockDir(t)
 	if _, err := Resolve(home, ""); err == nil {
 		t.Fatal("empty to with nothing running resolved")
 	}
@@ -180,5 +288,14 @@ func TestListAndResolve(t *testing.T) {
 	fakeConnector(t, home, "mybot@h3", 103)
 	if _, err := Resolve(home, "mybot"); err == nil || !strings.Contains(err.Error(), "mybot@h3") {
 		t.Fatalf("ambiguous bare name: %v", err)
+	}
+
+	// An agent named 102 (PID 104): "102" is other's PID, and a PID match wins.
+	digits := fakeConnector(t, home, "102@h4", 104)
+	if dir, err := Resolve(home, "102"); err != nil || dir != other {
+		t.Fatalf("Resolve(102) = %q %v, want the PID match %q", dir, err, other)
+	}
+	if dir, err := Resolve(home, "102@h4"); err != nil || dir != digits {
+		t.Fatalf("Resolve(102@h4) = %q %v", dir, err)
 	}
 }

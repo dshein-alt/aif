@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,8 +16,13 @@ import (
 )
 
 const (
-	callTimeout = 10 * time.Second // one control exchange, both sides
-	maxRequest  = 1 << 20          // a 16 KiB wake or note, JSON-escaped, fits with room to spare
+	callTimeout  = 10 * time.Second // one control exchange, both sides
+	readTimeout  = 2 * time.Second  // the server's wait for the request line
+	probeTimeout = 2 * time.Second  // List's status probe of each socket
+	maxRequest   = 1 << 20          // a 16 KiB wake or note, JSON-escaped, fits with room to spare
+	// maxSockPath is the longest Unix socket path that binds everywhere: sun_path is 104 bytes on
+	// darwin (108 on linux), one of them the terminating NUL.
+	maxSockPath = 103
 )
 
 // Request is one control-socket request, a single JSON line. Op is status, stop, wake (Text is the
@@ -65,17 +71,27 @@ type Server struct {
 
 // Serve binds dir/control.sock, removing a stale one first (the caller holds the state-directory
 // lock, so nobody else can own it), and serves each connection's request: op note from notes
-// when notes is non-nil, everything else through h.
-// ponytail: a Unix socket path is limited to ~108 bytes; a very long home or agent name fails
-// here, bind relative to the directory if that ever bites.
+// when notes is non-nil, everything else through h. The socket is mode 0600 on Unix (the directory
+// is 0700 already; wake injects prompt text into an agent with a shell tool).
+// ponytail: a socket path over maxSockPath fails here (a very long home or agent name); Go cannot
+// bind relative to the directory, so the way out is a shorter or hashed directory key.
 func Serve(dir string, notes *Notes, h Handler) (*Server, error) {
 	sock := filepath.Join(dir, "control.sock")
+	if len(sock) > maxSockPath {
+		return nil, fmt.Errorf("control socket path too long (%d bytes, limit %d): %s", len(sock), maxSockPath, sock)
+	}
 	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		return nil, err
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(sock, 0o600); err != nil {
+			ln.Close()
+			return nil, err
+		}
 	}
 	s := &Server{ln: ln}
 	s.wg.Go(func() {
@@ -96,7 +112,7 @@ func Serve(dir string, notes *Notes, h Handler) (*Server, error) {
 
 func serveConn(c net.Conn, notes *Notes, h Handler) {
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(callTimeout))
+	c.SetReadDeadline(time.Now().Add(readTimeout))
 	var req Request
 	var resp Response
 	switch err := json.NewDecoder(io.LimitReader(c, maxRequest)).Decode(&req); {
@@ -107,10 +123,16 @@ func serveConn(c net.Conn, notes *Notes, h Handler) {
 	default:
 		resp = h(req)
 	}
+	if !resp.OK && resp.Error == "" {
+		resp.Error = "request failed"
+	}
+	c.SetWriteDeadline(time.Now().Add(callTimeout))
 	json.NewEncoder(c).Encode(resp)
 }
 
-// Close stops accepting, waits for the requests in flight and removes the socket.
+// Close stops accepting, waits for the requests in flight and removes the socket. It must not be
+// called from within a handler, nor while holding a lock a handler takes (the loop's state
+// mutex), or it deadlocks.
 func (s *Server) Close() {
 	s.ln.Close() // net removes the socket file it created
 	s.wg.Wait()
@@ -142,12 +164,17 @@ func (n *Notes) handle(r Request) Response {
 
 // Call sends one request to the connector whose state directory is dir and returns its reply.
 func Call(dir string, req Request) (Response, error) {
-	c, err := net.DialTimeout("unix", filepath.Join(dir, "control.sock"), callTimeout)
+	return exchange(dir, req, callTimeout)
+}
+
+// exchange is Call with the whole exchange, dial included, bounded by timeout.
+func exchange(dir string, req Request, timeout time.Duration) (Response, error) {
+	c, err := net.DialTimeout("unix", filepath.Join(dir, "control.sock"), timeout)
 	if err != nil {
 		return Response{}, err
 	}
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(callTimeout))
+	c.SetDeadline(time.Now().Add(timeout))
 	if err := json.NewEncoder(c).Encode(req); err != nil {
 		return Response{}, err
 	}
@@ -172,13 +199,14 @@ func (f Found) String() string {
 }
 
 // List finds the running connectors under home/.aif-connect, sorted by directory name. A socket
-// that does not answer status (a stale one left by a crash) is skipped.
+// that does not answer status within probeTimeout (a stale one left by a crash, or a wedged
+// connector) is skipped.
 func List(home string) []Found {
 	socks, _ := filepath.Glob(filepath.Join(home, ".aif-connect", "*", "control.sock"))
 	var found []Found
 	for _, sock := range socks {
 		dir := filepath.Dir(sock)
-		if r, err := Call(dir, Request{Op: "status"}); err == nil && r.OK && r.Status != nil {
+		if r, err := exchange(dir, Request{Op: "status"}, probeTimeout); err == nil && r.OK && r.Status != nil {
 			found = append(found, Found{dir, filepath.Base(dir), *r.Status})
 		}
 	}
@@ -187,7 +215,8 @@ func List(home string) []Found {
 
 // Resolve picks the running connector named by to: a PID, a bare agent name (unique among the
 // running name@… directories; case-insensitive, as AIF names are) or name@origin-key. An empty to
-// resolves when exactly one connector is running. The errors list the running ones.
+// resolves when exactly one connector is running. A PID match wins over an agent whose name is the
+// same digits. The errors list the running ones.
 func Resolve(home, to string) (string, error) {
 	running := List(home)
 	if len(running) == 0 {
@@ -195,9 +224,16 @@ func Resolve(home, to string) (string, error) {
 	}
 	var hits []Found
 	for _, f := range running {
-		name, _, _ := strings.Cut(f.Name, "@")
-		if to == "" || to == strconv.Itoa(f.Status.PID) || strings.EqualFold(to, f.Name) || strings.EqualFold(to, name) {
+		if to == strconv.Itoa(f.Status.PID) {
 			hits = append(hits, f)
+		}
+	}
+	if len(hits) == 0 {
+		for _, f := range running {
+			name, _, _ := strings.Cut(f.Name, "@")
+			if to == "" || strings.EqualFold(to, f.Name) || strings.EqualFold(to, name) {
+				hits = append(hits, f)
+			}
 		}
 	}
 	if len(hits) == 1 {

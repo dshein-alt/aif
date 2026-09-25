@@ -56,7 +56,10 @@ func TestNotesSetGetDeleteList(t *testing.T) {
 }
 
 func TestNotesLimits(t *testing.T) {
-	n, _ := LoadNotes(t.TempDir())
+	n, err := LoadNotes(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []string{"", "a b", "a/b", "ü", strings.Repeat("x", 65)} {
 		if err := n.Set(id, "x"); err == nil {
 			t.Fatalf("id %q accepted", id)
@@ -89,5 +92,19 @@ func TestNotesBadFile(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "notes.json"), []byte("{"), 0o600)
 	if _, err := LoadNotes(dir); err == nil {
 		t.Fatal("corrupt notes.json loaded")
+	}
+}
+
+func TestNotesNullFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.json"), []byte("null"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := LoadNotes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Set("a", "x"); err != nil {
+		t.Fatal(err)
 	}
 }

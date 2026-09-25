@@ -91,20 +91,25 @@ func LoadState(dir, origin string) (s *State, fresh bool, err error) {
 	return nil, false, fmt.Errorf("%s holds origin %q, config says %q", p, s.Origin, origin)
 }
 
-// Save writes state.json atomically: temp file in the same directory, fsync, rename. The caller
-// holds s's mutex.
-// ponytail: the directory is not fsynced after the rename, so a power loss may roll back to the
-// previous state (pending recovery covers it); fsync the dir on Unix if that ever matters.
+// Save writes state.json atomically (writeAtomic). The caller holds s's mutex.
 func (s *State) Save() error {
 	b, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(s.dir, "state.json.*")
+	return writeAtomic(filepath.Join(s.dir, "state.json"), b)
+}
+
+// writeAtomic replaces path with data: temp file path.* in the same directory, fsync, rename; the
+// temp file is removed on failure. State.Save and the notes store both write through it.
+// ponytail: the directory is not fsynced after the rename, so a power loss may roll back to the
+// previous file (pending recovery covers state.json); fsync the dir on Unix if that ever matters.
+func writeAtomic(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(b)
+	_, err = f.Write(data)
 	if err == nil {
 		err = f.Sync()
 	}
@@ -112,7 +117,7 @@ func (s *State) Save() error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(f.Name(), filepath.Join(s.dir, "state.json"))
+		err = os.Rename(f.Name(), path)
 	}
 	if err != nil {
 		os.Remove(f.Name())

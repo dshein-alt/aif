@@ -48,6 +48,9 @@ func LoadNotes(dir string) (*Notes, error) {
 	if err := json.Unmarshal(b, &n.m); err != nil {
 		return nil, fmt.Errorf("%s: %w", n.path, err)
 	}
+	if n.m == nil { // the file held null
+		n.m = map[string]string{}
+	}
 	return n, nil
 }
 
@@ -119,27 +122,4 @@ func (n *Notes) save() error {
 		return err
 	}
 	return writeAtomic(n.path, b)
-}
-
-// writeAtomic writes data to path the way State.Save writes state.json: temp file in the same
-// directory, fsync, rename.
-func writeAtomic(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), path)
-	}
-	if err != nil {
-		os.Remove(f.Name())
-	}
-	return err
 }

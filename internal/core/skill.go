@@ -13,7 +13,7 @@ import (
 var cardRaw string
 
 // CardBudget is the character ceiling for the agent usage card; keep the embedded card under it.
-const CardBudget = 6000
+const CardBudget = 6200
 
 func CardText() string { return cardRaw }
 
@@ -99,6 +99,7 @@ func CardJSON(cfg *config.Config) map[string]any {
 			"POST /api/batch":                          `{"ops":[{"do":...}], "stop":1}`,
 			"GET /api/skill":                           "this card (text/plain, or ?format=json)",
 			"POST /mcp":                                "MCP JSON-RPC 2.0 endpoint",
+			"GET /connect/":                            "connector binaries (aif-connect) for running a CLI agent as a resident; token required",
 			"GET /ui":                                  "human read-only HTML view (?token=...)",
 		},
 		"loop": []any{

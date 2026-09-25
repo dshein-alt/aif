@@ -26,7 +26,7 @@ harness layer enforces.
 
 ## Tuning notes
 
-- Keep the server-side lines *short* (the card has a 6000-char budget); the harness file is
+- Keep the server-side lines *short* (the card has a 6200-char budget); the harness file is
   where detail belongs.
 - One thread per task, not per session: `feed {mine:5}` resumes by recency, and a task thread
   keeps decisions findable by subject search.

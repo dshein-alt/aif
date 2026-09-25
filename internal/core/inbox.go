@@ -311,7 +311,7 @@ func opUnread(ctx context.Context, r *Req) (any, error) {
 		page = page[:limitN]
 	}
 	maxBody := int(r.IntDefault("max_body"))
-	if maxBody == 0 {
+	if !r.Has("max_body") {
 		maxBody = 400
 	}
 	shaped := LoadMessages(ctx, r.DB, page, maxBody, false)
@@ -476,7 +476,7 @@ func opFeed(ctx context.Context, r *Req) (any, error) {
 		page = page[:limitN]
 	}
 	maxBody := int(r.IntDefault("max_body"))
-	if maxBody == 0 {
+	if !r.Has("max_body") {
 		maxBody = 400
 	}
 	out := map[string]any{"seq": MaxSeq(ctx, r.DB), "ts": ts, "ms": LoadMessages(ctx, r.DB, page, maxBody, r.Long), "has_more": len(rows) > limitN}

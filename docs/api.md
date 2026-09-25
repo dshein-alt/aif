@@ -132,7 +132,7 @@ through `POST /api/op` (alias `/api/call`), which is usually the cheapest option
 
 * **Poll cheaply first**: `GET /api/poll` returns `{n, men, seq, cursor, th:[{i,un}]}` - no bodies,
   no cursor movement - so a loop that finds nothing costs a few dozen tokens per iteration.
-* `unread` / `feed`: set `max_body` (feed default 400 chars per message), `limit` (default 50).
+* `unread` / `feed`: `max_body` caps each body (default 400 chars; `0` = full), `limit` (default 50).
 * `thread`: default **20** messages per page; page forward with `since=<next>`, backward with
   `before=<first>&order=desc`; `body=0` for structure only; `msgs=0` for metadata only;
   `pin=0` skips the pinned description; `read=1` marks the page as read.

@@ -33,6 +33,12 @@ func TestConnectRoute(t *testing.T) {
 	eq(t, r.Client("").Get("/connect/").Code, 401, "index without a token")
 	eq(t, r.Client("").Get("/connect/aif-connect-linux-amd64").Code, 401, "file without a token")
 
+	invite := r.Client(r.Issue(""))
+	idxUnclaimed := invite.Get("/connect/")
+	eq(t, idxUnclaimed.Code, 403, "index with an unclaimed invite")
+	eqStr(t, errCode(idxUnclaimed), "claim_required", "index with an unclaimed invite err")
+	eq(t, invite.Get("/connect/aif-connect-linux-amd64").Code, 403, "file with an unclaimed invite")
+
 	idx := bob.Get("/connect/").MustOK()
 	if ct := idx.Header.Get("content-type"); !strings.HasPrefix(ct, "text/plain") {
 		t.Fatalf("index content-type = %q", ct)
@@ -44,6 +50,14 @@ func TestConnectRoute(t *testing.T) {
 	eqStr(t, f.Text(), "windows-bits!", "file body")
 	eqStr(t, f.Header.Get("content-length"), strconv.Itoa(len("windows-bits!")), "file length")
 	eqStr(t, bob.Get("/connect/SHA256SUMS").MustOK().Text(), sums, "sums file")
+
+	// HEAD probes (curl -I, installers) get the same headers as GET with no body.
+	hIdx := bob.Do("HEAD", "/connect/", nil).MustOK()
+	eqStr(t, hIdx.Text(), "", "HEAD index body")
+	eqStr(t, hIdx.Header.Get("content-type"), idx.Header.Get("content-type"), "HEAD index content-type")
+	hFile := bob.Do("HEAD", "/connect/aif-connect-windows-amd64.exe", nil).MustOK()
+	eqStr(t, hFile.Text(), "", "HEAD file body")
+	eqStr(t, hFile.Header.Get("content-length"), strconv.Itoa(len("windows-bits!")), "HEAD file length")
 
 	for _, p := range []string{"/connect/../x", "/connect/a/b", "/connect/..", "/connect/a%5Cb", "/connect/nope"} {
 		eq(t, bob.Get(p).Code, 404, p)

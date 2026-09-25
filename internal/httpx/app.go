@@ -36,6 +36,29 @@ var openapiYAML []byte
 // metaKeys are query params that never become op arguments.
 var metaKeys = map[string]bool{"fmt": true, "token": true, "as": true, "agent": true, "me": true, "do": true, "op": true}
 
+// restClaimHint is how an invite token registers itself, as told to REST/MCP-HTTP callers (the
+// stdio MCP hint reads differently: it names the register tool instead of the REST path).
+const restClaimHint = `POST /api/agents {"name":"<pick a name>"}`
+
+// claimRequiredErr is the 403 an unclaimed invite token gets from anything but register/ping/skill.
+func claimRequiredErr(hint string) *core.ApiError {
+	return core.NewError(403, "claim_required", "an invite token must be claimed before anything else", hint)
+}
+
+// connectDirWarnOnce keeps the missing-AIF_CONNECT_DIR notice to a single line per process even
+// though Router() (and so the check) can run more than once, e.g. across tests in one binary.
+var connectDirWarnOnce sync.Once
+
+func warnConnectDirOnce(dir string) {
+	connectDirWarnOnce.Do(func() {
+		label := "unset"
+		if dir != "" {
+			label = strconv.Quote(dir)
+		}
+		log.Printf("/connect/: AIF_CONNECT_DIR %s not found, connector downloads disabled", label)
+	})
+}
+
 // App is the HTTP transport: config + a Postgres pool, mounting the REST, MCP and /ui surfaces.
 type App struct {
 	cfg     *config.Config
@@ -60,7 +83,7 @@ func (a *App) Call(ctx context.Context, name string, args map[string]any, me str
 		return nil, core.NewError(400, "unknown_op", fmt.Sprintf("unknown op %q; available ops: %s", name, strings.Join(names, ", ")), "")
 	}
 	if claim != "" && !strIn(name, "register", "ping", "skill") {
-		return nil, core.NewError(403, "claim_required", "an invite token must be claimed before anything else", `POST /api/agents {"name":"<pick a name>"}`)
+		return nil, claimRequiredErr(restClaimHint)
 	}
 	if core.IsReadonly(name, args) {
 		return core.Run(ctx, a.pool, a.cfg, name, args, me, admin, claim, token)
@@ -150,10 +173,12 @@ func (a *App) Router() http.Handler {
 	r.Get("/mcp", a.handleMCPGet)
 
 	if st, err := os.Stat(a.cfg.ConnectDir); a.cfg.ConnectDir == "" || err != nil || !st.IsDir() {
-		log.Printf("/connect/: AIF_CONNECT_DIR %q not found, connector downloads disabled", a.cfg.ConnectDir)
+		warnConnectDirOnce(a.cfg.ConnectDir)
 	}
 	r.Get("/connect/", a.handleConnect)
+	r.Head("/connect/", a.handleConnect)
 	r.Get("/connect/{file}", a.handleConnect)
+	r.Head("/connect/{file}", a.handleConnect)
 
 	a.mountUIRoutes(r)
 	return r
@@ -1014,7 +1039,7 @@ func (a *App) handleConnect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if p.claim != "" {
-		writeErr(w, core.NewError(403, "claim_required", "an invite token must be claimed before anything else", `POST /api/agents {"name":"<pick a name>"}`))
+		writeErr(w, claimRequiredErr(restClaimHint))
 		return
 	}
 	notFound := core.NewError(404, "not_found", "no such connector file", "GET /connect/ lists them")
@@ -1025,7 +1050,7 @@ func (a *App) handleConnect(w http.ResponseWriter, req *http.Request) {
 	}
 	if name != "" {
 		path := filepath.Join(dir, filepath.Base(name))
-		if st, err := os.Stat(path); err != nil || !st.Mode().IsRegular() {
+		if st, err := os.Lstat(path); err != nil || !st.Mode().IsRegular() {
 			writeErr(w, notFound)
 			return
 		}

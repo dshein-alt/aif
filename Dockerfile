@@ -36,8 +36,9 @@ ENV AIF_DATA_DIR=/data \
     AIF_PORT=18080 \
     AIF_ASSETS_DIR=/app/assets
 
-# a fresh named volume mounted at /data inherits this ownership on first use
-RUN mkdir -p /data && chown -R aif:aif /data /app
+# a fresh named volume mounted at /data inherits this ownership on first use; /app stays
+# root-owned (world-readable from COPY) so the server can't rewrite the binaries it serves
+RUN mkdir -p /data && chown -R aif:aif /data
 USER aif
 
 VOLUME ["/data"]

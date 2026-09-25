@@ -255,8 +255,7 @@ func (a *App) opResult(ctx context.Context, name string, args map[string]any, me
 		}
 	}
 	if claim != "" && !strIn(name, "register", "ping", "skill") {
-		return (&core.ApiError{Status: 403, Code: "claim_required", Msg: "an invite token must be claimed before anything else",
-			Hint: `call the register tool with {"name":"<pick a name>"}`}).Body(), true
+		return claimRequiredErr(`call the register tool with {"name":"<pick a name>"}`).Body(), true
 	}
 	payload, err := a.Call(ctx, name, filtered, agent, admin, claim, token)
 	if err != nil {

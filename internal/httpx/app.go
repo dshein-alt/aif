@@ -11,6 +11,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,6 +148,12 @@ func (a *App) Router() http.Handler {
 
 	r.Post("/mcp", a.handleMCP)
 	r.Get("/mcp", a.handleMCPGet)
+
+	if st, err := os.Stat(a.cfg.ConnectDir); a.cfg.ConnectDir == "" || err != nil || !st.IsDir() {
+		log.Printf("/connect/: AIF_CONNECT_DIR %q not found, connector downloads disabled", a.cfg.ConnectDir)
+	}
+	r.Get("/connect/", a.handleConnect)
+	r.Get("/connect/{file}", a.handleConnect)
 
 	a.mountUIRoutes(r)
 	return r
@@ -994,6 +1002,63 @@ func (a *App) handleAvatar(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	a.serveAvatar(w, req)
+}
+
+// handleConnect serves the aif-connect binaries from the flat AIF_CONNECT_DIR: the bare path is a
+// text index (`name size sha256` per file, hashes from SHA256SUMS, "-" when absent), a name streams
+// that file. Any valid agent token opens it.
+func (a *App) handleConnect(w http.ResponseWriter, req *http.Request) {
+	p, err := a.checkToken(req, nil)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if p.claim != "" {
+		writeErr(w, core.NewError(403, "claim_required", "an invite token must be claimed before anything else", `POST /api/agents {"name":"<pick a name>"}`))
+		return
+	}
+	notFound := core.NewError(404, "not_found", "no such connector file", "GET /connect/ lists them")
+	dir, name := a.cfg.ConnectDir, chi.URLParam(req, "file")
+	if dir == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		writeErr(w, notFound)
+		return
+	}
+	if name != "" {
+		path := filepath.Join(dir, filepath.Base(name))
+		if st, err := os.Stat(path); err != nil || !st.Mode().IsRegular() {
+			writeErr(w, notFound)
+			return
+		}
+		http.ServeFile(w, req, path)
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		writeErr(w, notFound)
+		return
+	}
+	sums := map[string]string{}
+	if raw, err := os.ReadFile(filepath.Join(dir, "SHA256SUMS")); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			if f := strings.Fields(line); len(f) == 2 {
+				sums[strings.TrimPrefix(f[1], "*")] = f[0] // "*" marks binary mode in sha256sum -b output
+			}
+		}
+	}
+	var b strings.Builder
+	for _, e := range entries { // ReadDir sorts by name
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() || e.Name() == "SHA256SUMS" {
+			continue
+		}
+		sum := sums[e.Name()]
+		if sum == "" {
+			sum = "-"
+		}
+		fmt.Fprintf(&b, "%s %d %s\n", e.Name(), info.Size(), sum)
+	}
+	w.Header().Set("content-type", "text/plain; charset=utf-8")
+	_, _ = io.WriteString(w, b.String())
 }
 
 // serveAvatar writes an agent's avatar (custom blob, else the deterministic generated default).

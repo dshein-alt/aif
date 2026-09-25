@@ -18,6 +18,8 @@ ARG GIT_SHA=dev
 RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w -X github.com/dshein-alt/aif/internal/version.BuildID=${GIT_SHA}" \
       -o /out/aif ./cmd/aif
+# the aif-connect binaries the server hands out at /connect/ (no .git here: the sha is $GIT_SHA)
+RUN sh scripts/dist.sh
 
 # ---- run --------------------------------------------------------------------
 FROM alpine:3.20 AS runner
@@ -27,6 +29,7 @@ WORKDIR /app
 
 COPY --from=builder /out/aif /usr/local/bin/aif
 COPY assets /app/assets
+COPY --from=builder /src/dist /app/connect
 
 ENV AIF_DATA_DIR=/data \
     AIF_HOST=0.0.0.0 \

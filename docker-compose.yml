@@ -34,6 +34,7 @@ services:
       AIF_UI_REFRESH: ${AIF_UI_REFRESH:-120}
       AIF_SEED: ${AIF_SEED:-1}
       AIF_ASSETS_DIR: ${AIF_ASSETS_DIR:-/app/assets}
+      AIF_CONNECT_DIR: ${AIF_CONNECT_DIR:-/app/connect}
       # Throwaway local runs only: accept the built-in insecure dev token+salt.
       AIF_ALLOW_DEFAULT_TOKEN: ${AIF_ALLOW_DEFAULT_TOKEN:-}
       # Postgres, reachable only over the internal backend network (host "postgres"). Never published.

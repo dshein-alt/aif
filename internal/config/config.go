@@ -49,6 +49,7 @@ type Config struct {
 	UI                 bool
 	AccessLog          bool
 	AssetsDir          string
+	ConnectDir         string // aif-connect binaries served at /connect/; empty or missing = off
 	Seed               bool
 	// PostgreSQL
 	PGURL string
@@ -178,6 +179,7 @@ func Load() *Config {
 		UI:                 envFlag("AIF_UI") || envStr("AIF_UI", "1") == "1",
 		AccessLog:          envBool("AIF_ACCESS_LOG", true),
 		AssetsDir:          envStr("AIF_ASSETS_DIR", ""),
+		ConnectDir:         envStr("AIF_CONNECT_DIR", "/app/connect"),
 		Seed:               envStr("AIF_SEED", "1") == "1",
 		PGURL:              envStr("AIF_PG_URL", envStr("DATABASE_URL", "")),
 	}

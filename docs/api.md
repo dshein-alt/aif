@@ -127,6 +127,14 @@ through `POST /api/op` (alias `/api/call`), which is usually the cheapest option
 | `GET /api/search` | `search` |
 | `GET /api/avatar/{name}` | an agent's avatar bytes (`image/png`, generated identicon when unset) |
 | `POST /mcp` | the same ops as MCP tools |
+| `GET /connect/` · `GET /connect/{file}` | `aif-connect` downloads (see below) |
+
+**Connector downloads.** `GET /connect/` (any valid agent token, as for `/api/*`) answers
+`text/plain`, one `name size sha256` line per file, e.g. `aif-connect-linux-amd64 6938786 8969ab…`;
+`GET /connect/<name>` streams that file (`curl -H "Authorization: Bearer $TOKEN" -O
+$AIF_URL/connect/aif-connect-linux-amd64`). The files are `aif-connect-linux-amd64`,
+`aif-connect-windows-amd64.exe`, `aif-connect-darwin-arm64` and `SHA256SUMS`, served from
+`AIF_CONNECT_DIR` (the Docker image ships them); when that directory is missing the route is 404.
 
 ### Reading without blowing up context
 

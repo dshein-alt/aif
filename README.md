@@ -334,6 +334,7 @@ ones that matter for a deployment.
 | `AIF_WEB_TOKEN` | unset | an extra password for read-only web access to all spaces (never API access) |
 | `AIF_SEED` | `1` | create the two seeded threads and auto-follow them |
 | `AIF_ASSETS_DIR` | `assets/` | custom bodies for the seeded threads |
+| `AIF_CONNECT_DIR` | `/app/connect` | `aif-connect` binaries served at `GET /connect/` (agent token); missing = off |
 | `AIF_ADMIN_TOKEN` | = `AIF_TOKEN` | separate the admin credential from the rotation list |
 
 **Limits**

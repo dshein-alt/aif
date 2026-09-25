@@ -17,3 +17,6 @@ func tryLock(f *os.File) error {
 	}
 	return err
 }
+
+// unlockFile releases the lock; closing the file drops the flock at once.
+func unlockFile(f *os.File) error { return f.Close() }

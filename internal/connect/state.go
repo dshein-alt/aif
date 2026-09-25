@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -55,28 +57,42 @@ type Wake struct {
 	Text string `json:"text"`
 }
 
-// LoadState reads dir/state.json. A missing file is the zero state for origin; a file recorded for
-// a different origin is an error (two servers must never share a state directory).
-func LoadState(dir, origin string) (*State, error) {
-	s := &State{dir: dir, Origin: origin}
-	b, err := os.ReadFile(filepath.Join(dir, "state.json"))
+// LoadState reads dir/state.json; the caller holds the directory lock (LockDir). A missing file is
+// the zero state for origin with fresh true, the signal for the first-run rule. An existing file
+// without an origin is corrupt, and one recorded for a different origin is an error (two servers
+// must never share a state directory); both errors name the file. Temp files a crashed Save left
+// behind are removed.
+func LoadState(dir, origin string) (s *State, fresh bool, err error) {
+	if ents, err := os.ReadDir(dir); err == nil {
+		for _, e := range ents {
+			if strings.HasPrefix(e.Name(), "state.json.") {
+				os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	p := filepath.Join(dir, "state.json")
+	b, err := os.ReadFile(p)
 	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
+		return &State{dir: dir, Origin: origin}, true, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	s = &State{dir: dir}
 	if err := json.Unmarshal(b, s); err != nil {
-		return nil, fmt.Errorf("%s: %w", filepath.Join(dir, "state.json"), err)
+		return nil, false, fmt.Errorf("%s: %w", p, err)
 	}
-	if s.Origin != origin {
-		return nil, fmt.Errorf("%s holds origin %q, config says %q", filepath.Join(dir, "state.json"), s.Origin, origin)
+	switch s.Origin {
+	case "":
+		return nil, false, fmt.Errorf("%s: no origin (corrupt state file)", p)
+	case origin:
+		return s, false, nil
 	}
-	return s, nil
+	return nil, false, fmt.Errorf("%s holds origin %q, config says %q", p, s.Origin, origin)
 }
 
 // Save writes state.json atomically: temp file in the same directory, fsync, rename. The caller
-// holds the lock.
+// holds s's mutex.
 // ponytail: the directory is not fsynced after the rename, so a power loss may roll back to the
 // previous state (pending recovery covers it); fsync the dir on Unix if that ever matters.
 func (s *State) Save() error {
@@ -111,7 +127,7 @@ func (s *State) Enqueue(text string) (string, error) {
 		return "", fmt.Errorf("wake message is %d bytes, the limit is %d", len(text), maxWakeBytes)
 	}
 	if len(s.Wake) >= maxWake {
-		return "", fmt.Errorf("wake queue is full (%d messages)", maxWake)
+		return "", fmt.Errorf("wake queue is full (%d); use stop or wait for a turn", maxWake)
 	}
 	id := rand.Text()
 	s.Wake = append(s.Wake, Wake{ID: id, Text: text})
@@ -123,23 +139,23 @@ func (s *State) Dequeue(ids ...string) {
 	s.Wake = slices.DeleteFunc(s.Wake, func(w Wake) bool { return slices.Contains(ids, w.ID) })
 }
 
-// EnsureDir creates the state directory, mode 0700.
-func EnsureDir(dir string) error { return os.MkdirAll(dir, 0o700) }
+// EnsureDir creates the state directory, mode 0700, and tightens an existing one to 0700 (it
+// holds control.sock) on Unix.
+func EnsureDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil || runtime.GOOS == "windows" {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
+}
 
 // ErrLocked means another connector holds the state directory's lock.
 var ErrLocked = errors.New("state directory is locked by another connector")
 
-// Unlocker releases the state-directory lock taken by Lock.
-type Unlocker interface{ Unlock() error }
-
-type lockFile struct{ f *os.File }
-
-// Unlock releases the lock; closing the file is enough on every OS.
-func (l lockFile) Unlock() error { return l.f.Close() }
-
-// Lock takes the exclusive, non-blocking lock on the file "lock" in dir, held until Unlock or
-// process exit (the OS releases it, so a crash leaves no stale lock). A held lock is ErrLocked.
-func Lock(dir string) (Unlocker, error) {
+// LockDir takes the exclusive, non-blocking lock on the file "lock" in dir and returns the func
+// that releases it. A held lock is ErrLocked. Keep the returned func reachable and call it at exit
+// (an unreachable lock file may be closed by the GC, which drops the lock); the OS releases the
+// lock if the process dies, so a crash leaves no stale lock.
+func LockDir(dir string) (unlock func() error, err error) {
 	f, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
@@ -148,5 +164,5 @@ func Lock(dir string) (Unlocker, error) {
 		f.Close()
 		return nil, err
 	}
-	return lockFile{f}, nil
+	return func() error { return unlockFile(f) }, nil
 }

@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,13 +35,20 @@ func TestLoadErrors(t *testing.T) {
 		{"bad agentName", `{` + minimal + `,"agentName":"../x"}`, "agentName: must match"},
 		{"no agentToken", `{"agent":"pi","goal":"g","aifUrl":"http://h","agentName":"a","thread":1}`, "agentToken: required"},
 		{"no thread", `{"agent":"pi","goal":"g","aifUrl":"http://h","agentName":"a","agentToken":"t"}`, "thread: required"},
-		{"thread type", `{` + minimal + `,"thread":"8"}`, "thread: must be a JSON int64"},
+		{"thread type", `{` + minimal + `,"thread":"8"}`, ": thread: must be a JSON int64, got string"},
+		{"operators type", `{` + minimal + `,"operators":"David"}`, ": operators: must be a JSON []string, got string"},
+		{"timeout type", `{` + minimal + `,"turnTimeout":30}`, ": turnTimeout: must be a JSON string, got number"},
+		{"top-level array", `[]`, ": must be a JSON object, got array"},
+		{"trailing garbage", `{` + minimal + `} x`, "invalid character 'x' after top-level value"},
+		{"blank goal", `{` + minimal + `,"goal":"  "}`, "goal: required"},
+		{"cwd missing", `{` + minimal + `,"cwd":"nope"}`, "nope is not a directory"},
+		{"cwd a file", `{` + minimal + `,"cwd":"c.json"}`, "c.json is not a directory"},
 		{"interval low", `{` + minimal + `,"interval":9}`, "interval: must be 10..86400"},
 		{"interval high", `{` + minimal + `,"interval":86401}`, "interval: must be 10..86400"},
 		{"timeout syntax", `{` + minimal + `,"turnTimeout":"30"}`, "turnTimeout: not a Go duration"},
 		{"timeout low", `{` + minimal + `,"turnTimeout":"59s"}`, "turnTimeout: must be at least 1m"},
 		{"prompt file missing", `{` + minimal + `,"systemPromptFile":"nope.md"}`, "systemPromptFile:"},
-		{"not json", `{`, "config"},
+		{"not json", `{`, "unexpected end of JSON input"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := LoadConfig(writeConfig(t, tc.body, 0o600), Overrides{})
@@ -66,11 +74,52 @@ func TestLoadDefaults(t *testing.T) {
 	if !c.IsOperator("theroot") || !c.IsOperator("GATEKEEPER") || c.IsOperator("mybot") {
 		t.Fatal("IsOperator is not case-insensitive over the defaults")
 	}
+	if c.AifURL != "http://h:1" || c.Ignored != nil {
+		t.Fatalf("aifUrl %q, ignored %v", c.AifURL, c.Ignored)
+	}
+	if b, _ := json.Marshal(c); strings.Contains(string(b), "urnTimeout") || strings.Contains(string(b), "gnored") {
+		t.Fatalf("marshaled Config carries internal fields: %s", b)
+	}
+}
+
+func TestLoadNormalizes(t *testing.T) {
+	body := `{"agent":" pi ","goal":" g ","aifUrl":"HTTPS://Example.COM/","agentName":" mybot ","agentToken":" aif_x ",` +
+		`"bin":" /x/pi ","thread":8,"mcpUrl":"https://example.com/mcp","provider":"x","AGENTNAME":"mybot"}`
+	c, err := LoadConfig(writeConfig(t, body, 0o600), Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AifURL != "https://example.com:443" {
+		t.Fatalf("aifUrl = %q", c.AifURL)
+	}
+	if c.Agent != "pi" || c.Goal != "g" || c.AgentName != "mybot" || c.AgentToken != "aif_x" || c.Bin != "/x/pi" {
+		t.Fatalf("not trimmed: %+v", c)
+	}
+	if strings.Join(c.Ignored, ",") != "mcpUrl,provider" {
+		t.Fatalf("ignored = %v", c.Ignored)
+	}
+}
+
+func TestLoadAifURLOrigin(t *testing.T) {
+	for _, u := range []string{
+		"http://h:1/mcp", "http://aif_secret@h:1", "http://u:aif_secret@h:1", "http://h:1?token=aif_secret",
+		"http://h:1/?x", "http://h:1?", "http://h:1#frag",
+	} {
+		_, err := LoadConfig(writeConfig(t, `{`+minimal+`,"aifUrl":"`+u+`"}`, 0o600), Overrides{})
+		if err == nil || !strings.Contains(err.Error(), "aifUrl: must be an origin (scheme://host[:port]), got ") {
+			t.Errorf("%s: err = %v", u, err)
+		} else if strings.Contains(err.Error(), "aif_secret") {
+			t.Errorf("%s: token not redacted: %v", u, err)
+		}
+	}
 }
 
 func TestLoadValues(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "role.md"), []byte("from file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "work"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	p := filepath.Join(dir, "c.json")

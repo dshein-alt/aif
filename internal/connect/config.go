@@ -11,14 +11,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
 
-// Config is the connector's config file, resolved: paths are absolute, defaults are filled in and
-// systemPrompt holds the ROLE text (read from systemPromptFile when systemPrompt is empty).
+// Config is the connector's config file, resolved: paths are absolute, defaults are filled in,
+// aifUrl is the normalized origin and systemPrompt holds the ROLE text (read from
+// systemPromptFile when systemPrompt is empty).
 type Config struct {
 	Agent            string        `json:"agent"`
 	Bin              string        `json:"bin"`
@@ -33,8 +36,11 @@ type Config struct {
 	Thread           int64         `json:"thread"`
 	Operators        []string      `json:"operators"`
 	Interval         int           `json:"interval"`
-	TurnTimeout      time.Duration `json:"turnTimeout"` // a Go duration string in the file
+	TurnTimeout      time.Duration `json:"-"` // "turnTimeout" in the file, a Go duration string
 	Cwd              string        `json:"cwd"`
+	// Ignored lists the file's keys the connector does not know (a pi config carries its own):
+	// not an error, the CLI warns about them.
+	Ignored []string `json:"-"`
 }
 
 // Overrides are the --agent and --bin flags; a non-empty value wins over the file.
@@ -49,44 +55,62 @@ func LoadConfig(path string, o Overrides) (Config, error) {
 	fail := func(key, format string, a ...any) (Config, error) {
 		return Config{}, fmt.Errorf("config %s: %s: %s", path, key, fmt.Sprintf(format, a...))
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("config: %w", err)
-	}
-	defer f.Close()
-	fi, err := f.Stat()
+	fi, err := os.Stat(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 		return Config{}, fmt.Errorf("config %s: config file must be mode 0600 (it holds the token; is %04o)", path, fi.Mode().Perm())
 	}
-	// The outer TurnTimeout shadows Config.TurnTimeout for encoding/json (shallower field wins).
-	var raw struct {
-		Config
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
+	var c Config
+	var tt struct {
 		TurnTimeout string `json:"turnTimeout"`
 	}
-	if err := json.NewDecoder(f).Decode(&raw); err != nil {
-		var te *json.UnmarshalTypeError
-		if errors.As(err, &te) {
+	var keys map[string]json.RawMessage
+	for _, v := range []any{&c, &tt, &keys} {
+		if err := json.Unmarshal(b, v); err != nil {
+			var te *json.UnmarshalTypeError
+			switch {
+			case !errors.As(err, &te):
+				return Config{}, fmt.Errorf("config %s: %w", path, err)
+			case te.Field == "":
+				return Config{}, fmt.Errorf("config %s: must be a JSON object, got %s", path, te.Value)
+			}
 			return fail(te.Field, "must be a JSON %s, got %s", te.Type, te.Value)
 		}
-		return Config{}, fmt.Errorf("config %s: %w", path, err)
 	}
-	c := raw.Config
+	// encoding/json matches keys case-insensitively, so this does too.
+	known := map[string]bool{"turntimeout": true}
+	for f := range reflect.TypeFor[Config]().Fields() {
+		known[strings.ToLower(f.Tag.Get("json"))] = true
+	}
+	for k := range keys {
+		if !known[strings.ToLower(k)] {
+			c.Ignored = append(c.Ignored, k)
+		}
+	}
+	slices.Sort(c.Ignored)
+
 	if o.Agent != "" {
 		c.Agent = o.Agent
 	}
 	if o.Bin != "" {
 		c.Bin = o.Bin
 	}
+	for _, p := range []*string{&c.Agent, &c.Bin, &c.Goal, &c.AgentName, &c.AgentToken} {
+		*p = strings.TrimSpace(*p)
+	}
 	dir := filepath.Dir(path)
 
 	for _, r := range []struct{ key, val string }{
-		{"agent", c.Agent}, {"goal", c.Goal}, {"aifUrl", c.AifURL},
+		{"agent", c.Agent}, {"goal", c.Goal}, {"aifUrl", strings.TrimSpace(c.AifURL)},
 		{"agentName", c.AgentName}, {"agentToken", c.AgentToken},
 	} {
-		if strings.TrimSpace(r.val) == "" {
+		if r.val == "" {
 			return fail(r.key, "required")
 		}
 	}
@@ -95,9 +119,23 @@ func LoadConfig(path string, o Overrides) (Config, error) {
 	default:
 		return fail("agent", "must be one of claude|codex|pi|opencode, got %q", c.Agent)
 	}
-	if _, _, err := OriginKey(c.AifURL); err != nil {
+	// An origin only: a path (pi's mcpUrl ends in /mcp) or a token pasted as userinfo is rejected,
+	// never silently dropped.
+	if u, err := url.Parse(c.AifURL); err == nil && (u.User != nil || u.Path != "" && u.Path != "/" ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "") {
+		if u.User != nil {
+			u.User = url.User("xxxxx")
+		}
+		if u.RawQuery != "" {
+			u.RawQuery = "xxxxx"
+		}
+		return fail("aifUrl", "must be an origin (scheme://host[:port]), got %s", u)
+	}
+	origin, _, err := OriginKey(c.AifURL)
+	if err != nil {
 		return fail("aifUrl", "%v", err)
 	}
+	c.AifURL = origin // the state key and the HTTP client both use this one form
 	if !nameRE.MatchString(c.AgentName) {
 		return fail("agentName", "must match %s, got %q", nameRE, c.AgentName)
 	}
@@ -126,9 +164,9 @@ func LoadConfig(path string, o Overrides) (Config, error) {
 	}
 
 	c.TurnTimeout = 30 * time.Minute
-	if raw.TurnTimeout != "" {
-		if c.TurnTimeout, err = time.ParseDuration(raw.TurnTimeout); err != nil {
-			return fail("turnTimeout", "not a Go duration (like 30m), got %q", raw.TurnTimeout)
+	if tt.TurnTimeout != "" {
+		if c.TurnTimeout, err = time.ParseDuration(tt.TurnTimeout); err != nil {
+			return fail("turnTimeout", "not a Go duration (like 30m), got %q", tt.TurnTimeout)
 		}
 	}
 	if c.TurnTimeout < time.Minute {
@@ -140,6 +178,9 @@ func LoadConfig(path string, o Overrides) (Config, error) {
 	}
 	if !filepath.IsAbs(c.Cwd) {
 		c.Cwd = filepath.Join(dir, c.Cwd)
+	}
+	if fi, err := os.Stat(c.Cwd); err != nil || !fi.IsDir() {
+		return fail("cwd", "%s is not a directory", c.Cwd)
 	}
 
 	if len(c.Operators) == 0 {

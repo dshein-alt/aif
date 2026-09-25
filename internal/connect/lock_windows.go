@@ -19,3 +19,12 @@ func tryLock(f *os.File) error {
 	}
 	return err
 }
+
+// unlockFile unlocks the byte before closing: Windows may release a closed handle's lock lazily.
+func unlockFile(f *os.File) error {
+	err := windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, new(windows.Overlapped))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}

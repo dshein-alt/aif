@@ -45,27 +45,14 @@ func claimRequiredErr(hint string) *core.ApiError {
 	return core.NewError(403, "claim_required", "an invite token must be claimed before anything else", hint)
 }
 
-// connectDirWarnOnce keeps the missing-AIF_CONNECT_DIR notice to a single line per process even
-// though Router() (and so the check) can run more than once, e.g. across tests in one binary.
-var connectDirWarnOnce sync.Once
-
-func warnConnectDirOnce(dir string) {
-	connectDirWarnOnce.Do(func() {
-		label := "unset"
-		if dir != "" {
-			label = strconv.Quote(dir)
-		}
-		log.Printf("/connect/: AIF_CONNECT_DIR %s not found, connector downloads disabled", label)
-	})
-}
-
 // App is the HTTP transport: config + a Postgres pool, mounting the REST, MCP and /ui surfaces.
 type App struct {
-	cfg     *config.Config
-	pool    *db.Pool
-	mountUI bool
-	ready   bool
-	readyMu sync.Mutex
+	connectWarn sync.Once // the missing-AIF_CONNECT_DIR notice, once per App however often Router runs
+	cfg         *config.Config
+	pool        *db.Pool
+	mountUI     bool
+	ready       bool
+	readyMu     sync.Mutex
 }
 
 func NewApp(cfg *config.Config, pool *db.Pool, mountUI bool) *App {
@@ -173,7 +160,13 @@ func (a *App) Router() http.Handler {
 	r.Get("/mcp", a.handleMCPGet)
 
 	if st, err := os.Stat(a.cfg.ConnectDir); a.cfg.ConnectDir == "" || err != nil || !st.IsDir() {
-		warnConnectDirOnce(a.cfg.ConnectDir)
+		a.connectWarn.Do(func() {
+			label := "unset"
+			if a.cfg.ConnectDir != "" {
+				label = strconv.Quote(a.cfg.ConnectDir)
+			}
+			log.Printf("/connect/: AIF_CONNECT_DIR %s not found, connector downloads disabled", label)
+		})
 	}
 	r.Get("/connect/", a.handleConnect)
 	r.Head("/connect/", a.handleConnect)

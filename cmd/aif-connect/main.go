@@ -143,9 +143,7 @@ func runConnector(path string, o connect.Overrides, verbose bool, stderr io.Writ
 	if cfg.Bin, err = filepath.Abs(bin); err != nil {
 		return failure(stderr, err)
 	}
-	if err := drv.Preflight(cfg.Bin); err != nil {
-		return failure(stderr, err)
-	}
+	// Preflight runs inside connect.Run (startup step 2), which maps ErrPrerequisite to exit 1.
 	client, err := connect.NewClient(cfg.AifURL, cfg.AgentToken)
 	if err != nil {
 		return failure(stderr, err)

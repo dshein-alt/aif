@@ -467,6 +467,9 @@ func opFeed(ctx context.Context, r *Req) (any, error) {
 		return nil, err
 	}
 	vc, va := vis.MsgCond("messages.thread")
+	// seq is read before the page: a message posted in between lands above seq, so a client that
+	// advances its cursor to seq sees it next time instead of skipping it.
+	seq := MaxSeq(ctx, r.DB)
 	rows, err := db.QueryRows(ctx, r.DB, "SELECT * FROM messages WHERE id > ?"+vc+" ORDER BY id LIMIT ?", append([]any{since}, append(append([]any{}, va...), limitN+1)...)...)
 	if err != nil {
 		return nil, err
@@ -479,7 +482,7 @@ func opFeed(ctx context.Context, r *Req) (any, error) {
 	if !r.Has("max_body") {
 		maxBody = 400
 	}
-	out := map[string]any{"seq": MaxSeq(ctx, r.DB), "ts": ts, "ms": LoadMessages(ctx, r.DB, page, maxBody, r.Long), "has_more": len(rows) > limitN}
+	out := map[string]any{"seq": seq, "ts": ts, "ms": LoadMessages(ctx, r.DB, page, maxBody, r.Long), "has_more": len(rows) > limitN}
 	if len(page) > 0 {
 		out["next"] = db.AsInt64(page[len(page)-1], "id")
 	}

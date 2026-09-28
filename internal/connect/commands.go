@@ -144,10 +144,10 @@ func Commit(st *State) error {
 	}
 	if p.Local != "" {
 		st.Dequeue(p.Local)
-	} else {
+	} else if p.Remote == 0 {
 		st.LastControl = max(st.LastControl, p.Msg)
 	}
-	ref := &Ref{From: p.From, Msg: p.Msg}
+	ref := &Ref{From: p.From, Msg: p.Msg, CommandID: p.Remote, Deadline: p.Deadline}
 	switch p.Action {
 	case "RESET":
 		st.Session, st.FreshSession = "", ref
@@ -167,6 +167,15 @@ func (l *loop) commands(forum bool) Reason {
 		l.st.Lock()
 		p := l.st.Pending
 		l.st.Unlock()
+		if p == nil && l.remoteCh != nil {
+			select {
+			case cmd := <-l.remoteCh:
+				if r := l.handleRemote(cmd); r != "" {
+					return r
+				}
+			default:
+			}
+		}
 		var err error
 		if p == nil {
 			p, err = LocalScan(l.st)
@@ -196,7 +205,19 @@ func (l *loop) commands(forum bool) Reason {
 		if p == nil {
 			break
 		}
+		if !l.confirmPending(p) {
+			l.st.Lock()
+			stillPending := l.st.Pending != nil
+			l.st.Unlock()
+			if stillPending {
+				return ReasonBlocked
+			}
+			continue // the server rejected the recovered command
+		}
 		l.execute(p)
+		if p.Action == "KILL" {
+			return ReasonKill
+		}
 		if p.Action == "SHUTDOWN" {
 			return ReasonShutdown
 		}
@@ -229,12 +250,18 @@ func (l *loop) scanned(err error) {
 // execute logs and commits a recorded command; a RESET stops the harness first (the next turn
 // starts it on a fresh session).
 func (l *loop) execute(p *Pending) {
+	l.announce(p)
 	if p.Local != "" {
 		l.logf("control=%s from=local", p.Action)
+	} else if p.Remote != 0 {
+		l.logf("control=%s from=%s command=%d", p.Action, p.From, p.Remote)
 	} else {
 		l.logf("control=%s from=%s msg=%d", p.Action, p.From, p.Msg)
 	}
-	if p.Action == "RESET" {
+	switch p.Action {
+	case "KILL":
+		l.forceKill()
+	case "RESET":
 		l.kill()
 	}
 	if err := Commit(l.st); err != nil {

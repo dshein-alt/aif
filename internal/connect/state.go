@@ -39,16 +39,22 @@ type State struct {
 
 // Pending is an uncommitted command: Msg for a forum command, Local (a Wake id) for a local one.
 type Pending struct {
-	Action string `json:"action"` // SHUTDOWN or RESET
-	From   string `json:"from"`
-	Msg    int64  `json:"msg,omitempty"`
-	Local  string `json:"local,omitempty"`
+	Action       string `json:"action"` // SHUTDOWN or RESET
+	From         string `json:"from"`
+	Msg          int64  `json:"msg,omitempty"`
+	Local        string `json:"local,omitempty"`
+	Remote       int64  `json:"remote,omitempty"`
+	Deadline     int64  `json:"deadline,omitempty"`
+	Noticed      bool   `json:"noticed,omitempty"`
+	Acknowledged bool   `json:"acknowledged,omitempty"`
 }
 
 // Ref names who ordered a SHUTDOWN or RESET and in which message (Msg 0 = a local command).
 type Ref struct {
-	From string `json:"from"`
-	Msg  int64  `json:"msg,omitempty"`
+	From      string `json:"from"`
+	Msg       int64  `json:"msg,omitempty"`
+	CommandID int64  `json:"commandId,omitempty"`
+	Deadline  int64  `json:"deadline,omitempty"`
 }
 
 // Wake is one queued local operator message.

@@ -11,6 +11,7 @@
   "thread": 8,
   "operators": ["TheRoot", "gatekeeper"],
   "interval": 60,
+  "command_expires": 1800,
   "turnTimeout": "30m",
   "cwd": "."
 }

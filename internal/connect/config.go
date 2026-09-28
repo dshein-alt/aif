@@ -36,6 +36,7 @@ type Config struct {
 	Thread           int64         `json:"thread"`
 	Operators        []string      `json:"operators"`
 	Interval         int           `json:"interval"`
+	CommandExpires   int64         `json:"commandExpires"`
 	TurnTimeout      time.Duration `json:"-"` // "turnTimeout" in the file, a Go duration string
 	Cwd              string        `json:"cwd"`
 	// Ignored lists the file's keys the connector does not know (a pi config carries its own):
@@ -83,8 +84,16 @@ func LoadConfig(path string, o Overrides) (Config, error) {
 			return fail(te.Field, "must be a JSON %s, got %s", te.Type, te.Value)
 		}
 	}
+	if raw, ok := keys["command_expires"]; ok {
+		if _, both := keys["commandExpires"]; both {
+			return fail("command_expires", "set either command_expires or commandExpires, not both")
+		}
+		if err := json.Unmarshal(raw, &c.CommandExpires); err != nil {
+			return fail("command_expires", "must be an integer number of seconds")
+		}
+	}
 	// encoding/json matches keys case-insensitively, so this does too.
-	known := map[string]bool{"turntimeout": true}
+	known := map[string]bool{"turntimeout": true, "command_expires": true}
 	for f := range reflect.TypeFor[Config]().Fields() {
 		known[strings.ToLower(f.Tag.Get("json"))] = true
 	}
@@ -158,6 +167,12 @@ func LoadConfig(path string, o Overrides) (Config, error) {
 
 	if c.Interval == 0 {
 		c.Interval = 60
+	}
+	if c.CommandExpires == 0 {
+		c.CommandExpires = 1800
+	}
+	if c.CommandExpires < 1 || c.CommandExpires > 31536000 {
+		return fail("commandExpires", "must be 1..31536000 seconds, got %d", c.CommandExpires)
 	}
 	if c.Interval < 10 || c.Interval > 86400 {
 		return fail("interval", "must be 10..86400 seconds, got %d", c.Interval)

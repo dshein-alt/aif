@@ -268,3 +268,14 @@ func TestRegisterDuplicatePanics(t *testing.T) {
 	}()
 	Register("dup-test", func() Driver { return nil })
 }
+
+func TestForceStopBeforeStart(t *testing.T) {
+	var p *proc
+	if err := p.ForceStop(); err != nil {
+		t.Fatal(err)
+	}
+	p = newProc(Launch{})
+	if err := p.ForceStop(); err != nil {
+		t.Fatal(err)
+	}
+}

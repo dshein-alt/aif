@@ -14,6 +14,8 @@ const (
 	ReasonWake     Reason = "wake"
 	ReasonRecover  Reason = "recover"
 	ReasonShutdown Reason = "shutdown"
+	ReasonKill     Reason = "kill"
+	ReasonBlocked  Reason = "blocked"
 )
 
 var reasonText = map[Reason]string{
@@ -82,6 +84,9 @@ func Prompt(p PromptInput) (string, error) {
 // sender renders who ordered a command: "<name> (message <id>)" for a forum command, "a local
 // operator" for one that came through the local wake queue (Msg 0).
 func sender(r Ref) string {
+	if r.CommandID != 0 {
+		return fmt.Sprintf("%s (command %d)", r.From, r.CommandID)
+	}
 	if r.Msg == 0 {
 		return "a local operator"
 	}

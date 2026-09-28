@@ -137,6 +137,23 @@ func (p *proc) Stop() error {
 	return nil
 }
 
+// ForceStop kills the whole process group immediately. The driver's Stop still cleans up
+// its protocol state and temporary files after this returns.
+func (p *proc) ForceStop() error {
+	if p == nil || p.cmd == nil {
+		return nil
+	}
+	p.stopOnce.Do(func() { close(p.stopping) })
+	select {
+	case <-p.exited:
+		return nil
+	default:
+	}
+	kill(p.cmd.Process)
+	<-p.exited
+	return nil
+}
+
 // TempFile writes <StateDir>/<name> with mode 0600 and returns its path; Cleanup removes it.
 func (p *proc) TempFile(name, content string) (string, error) {
 	path := filepath.Join(p.launch.StateDir, name)

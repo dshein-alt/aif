@@ -952,6 +952,23 @@ func TestShutdownTurnTimeout(t *testing.T) {
 	}
 }
 
+func TestShutdownAbsoluteDeadline(t *testing.T) {
+	e := newEnv(t)
+	e.seed(&State{Session: "s1", Agent: "pi", Shutdown: &Ref{From: "root", CommandID: 7, Deadline: time.Now().Unix() + 2}})
+	e.cfg.TurnTimeout = 5 * time.Second
+	e.drv.steps = []step{hangStep}
+	start := time.Now()
+	e.wantCode(e.run(nil), 0)
+	if elapsed := time.Since(start); elapsed >= 4*time.Second {
+		t.Fatalf("shutdown exceeded its absolute deadline: %s", elapsed)
+	}
+	e.wantLog("turn=1 timeout after")
+	e.wantLog("outcome=cancelled")
+	if len(e.prompts()) != 1 || len(e.drv.launches) != 1 || e.state().Shutdown != nil {
+		t.Errorf("prompts %d launches %d shutdown %+v", len(e.prompts()), len(e.drv.launches), e.state().Shutdown)
+	}
+}
+
 func TestStatusMidTurn(t *testing.T) {
 	e := newEnv(t)
 	e.seed(&State{})

@@ -38,6 +38,9 @@ type loop struct {
 	lastInbox           int64
 	recover, cause      string // a recover turn owed: its control text and the failure's cause
 	pollErr             string
+	remoteCh            chan RemoteCommand
+	remoteDone          chan struct{}
+	override            Reason
 	deaths              []time.Time
 	text                strings.Builder // model text not logged yet (logEvent); the idle watcher's while it runs
 }
@@ -54,16 +57,45 @@ func (l *loop) save() {
 
 // run is the turn loop proper, from turn 1 on.
 func (l *loop) run(reason Reason) int {
+	if _, ok := l.d.Client.(remoteClient); ok {
+		watchCtx, cancel := context.WithCancel(l.ctx)
+		defer cancel()
+		l.remoteCh = make(chan RemoteCommand, 1)
+		l.remoteDone = make(chan struct{}, 1)
+		go l.watchRemote(watchCtx)
+	}
 	for {
+		if reason == ReasonKill {
+			return l.finish(false)
+		}
+		if reason == ReasonBlocked {
+			return 5
+		}
 		if l.stopRequested() {
 			return l.finish(false)
 		}
 		if !l.ensure() {
+			if reason == ReasonShutdown && l.shutdownExpired() {
+				return l.finish(true)
+			}
 			return 4
 		}
 		ok := l.turn(reason)
+		if l.override != "" {
+			reason, l.override = l.override, ""
+			if reason == ReasonKill {
+				return l.finish(false)
+			}
+			continue
+		}
 		if reason == ReasonShutdown || l.stopRequested() {
 			return l.finish(reason == ReasonShutdown)
+		}
+		if len(l.remoteCh) > 0 {
+			if r := l.commands(false); r != "" {
+				reason = r
+				continue
+			}
 		}
 		if !ok {
 			if l.failures++; l.failures >= failBudget {
@@ -75,6 +107,9 @@ func (l *loop) run(reason Reason) int {
 			}
 		}
 		if r := l.commands(true); r != "" {
+			if r == ReasonBlocked {
+				return 5
+			}
 			reason, l.recover = r, ""
 			continue
 		}
@@ -97,6 +132,12 @@ func (l *loop) ensure() bool {
 	}
 	l.logf("harness restarted")
 	return true
+}
+
+func (l *loop) shutdownExpired() bool {
+	l.st.Lock()
+	defer l.st.Unlock()
+	return l.st.Shutdown != nil && l.st.Shutdown.Deadline != 0 && time.Now().Unix() >= l.st.Shutdown.Deadline
 }
 
 func (l *loop) stopRequested() bool {
@@ -164,6 +205,9 @@ func (l *loop) wait() (Reason, int) {
 	interval := time.Duration(l.cfg.Interval) * time.Second
 	for {
 		if r := l.commands(false); r != "" {
+			if r == ReasonBlocked {
+				return "", 5
+			}
 			return r, 0
 		}
 		if r, stop := l.decide(false, 0, 0); stop || r != "" {
@@ -192,6 +236,9 @@ func (l *loop) wait() (Reason, int) {
 			l.st.Unlock()
 			if behind || l.held() {
 				if r := l.commands(true); r != "" {
+					if r == ReasonBlocked {
+						return "", 5
+					}
 					return r, 0
 				}
 			}
@@ -205,6 +252,9 @@ func (l *loop) wait() (Reason, int) {
 		case err.Error() != l.pollErr:
 			l.pollErr = err.Error()
 			l.logf("poll error: %v", err)
+		}
+		if len(l.remoteCh) > 0 {
+			continue
 		}
 		if rest := interval - l.d.Now().Sub(began); rest > 0 {
 			if _, exit := l.idle(func(ctx context.Context) { l.d.Sleep(ctx, rest) }); exit != nil {
@@ -224,7 +274,7 @@ func (l *loop) idle(f func(context.Context)) (skipped bool, exit *driver.Event) 
 	defer cancel()
 	l.st.Lock()
 	queued, local := len(l.st.Wake) > 0, len(promptWake(l.st.Wake)) < len(l.st.Wake)
-	if l.stopReq || local || queued && !l.held() {
+	if l.stopReq || local || len(l.remoteCh) > 0 || queued && !l.held() {
 		l.st.Unlock()
 		return true, nil
 	}

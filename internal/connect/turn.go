@@ -14,11 +14,21 @@ import (
 func (l *loop) start() error {
 	l.st.Lock()
 	saved := l.st.Session
+	var deadline int64
+	if l.st.Shutdown != nil {
+		deadline = l.st.Shutdown.Deadline
+	}
 	l.st.Unlock()
 	launch := l.launch
 	launch.SessionID = saved
-	// Without cancel: a stop must not kill the harness mid-turn; finish stops it.
-	if err := l.d.Driver.Start(context.WithoutCancel(l.ctx), launch); err != nil {
+	// An accepted SHUTDOWN has one deadline for startup and its goodbye turn.
+	startCtx := context.WithoutCancel(l.ctx)
+	if deadline != 0 {
+		var cancel context.CancelFunc
+		startCtx, cancel = context.WithDeadline(startCtx, time.Unix(deadline, 0))
+		defer cancel()
+	}
+	if err := l.d.Driver.Start(startCtx, launch); err != nil {
 		return err
 	}
 	l.alive = true
@@ -43,6 +53,15 @@ func (l *loop) start() error {
 // restart starts clean; it runs even when the harness already died, when Stop only removes its temp
 // files (the MCP config). A Stop cut short by its timeout has killed the process: its events, the
 // Exit last, must still be read before a Start.
+func (l *loop) forceKill() {
+	if d, ok := l.d.Driver.(interface{ ForceStop() error }); ok {
+		if err := d.ForceStop(); err != nil {
+			l.logf("harness force stop: %v", err)
+		}
+	}
+	l.kill()
+}
+
 func (l *loop) kill() {
 	l.alive = false
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(l.ctx), 30*time.Second)
@@ -118,7 +137,14 @@ func (l *loop) turn(reason Reason) bool {
 // recover turn's control text. Prompt runs aside: it blocks while the harness does not read its
 // stdin, and only Stop, on the timeout, unblocks it. exec returns only once Prompt has.
 func (l *loop) exec(text string, turn int64) (cause, control string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(l.ctx), l.cfg.TurnTimeout)
+	timeout := l.cfg.TurnTimeout
+	if l.st.Shutdown != nil && l.st.Shutdown.Deadline != 0 {
+		remaining := time.Until(time.Unix(l.st.Shutdown.Deadline, 0))
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(l.ctx), timeout)
 	defer cancel()
 	defer l.flushText()
 	events := l.d.Driver.Events()
@@ -134,7 +160,7 @@ func (l *loop) exec(text string, turn int64) (cause, control string) {
 				l.needContract = false
 			case ended: // the harness died first: its cause stands
 			case ctx.Err() != nil:
-				return l.timeout(turn, nil)
+				return l.timeout(turn, nil, timeout)
 			default:
 				l.kill() // a harness that cannot take a prompt is in no known state: restart it
 				return "prompt: " + err.Error(), RecoverFailed(err.Error())
@@ -154,8 +180,16 @@ func (l *loop) exec(text string, turn int64) (cause, control string) {
 				continue
 			}
 			ended, events = true, nil
+		case cmd := <-l.remoteCh:
+			if r := l.handleRemote(cmd); r != "" {
+				l.override = r
+				if sent != nil {
+					<-sent
+				}
+				return "interrupted by control", ""
+			}
 		case <-ctx.Done():
-			return l.timeout(turn, sent)
+			return l.timeout(turn, sent, timeout)
 		}
 	}
 	return cause, control
@@ -163,8 +197,8 @@ func (l *loop) exec(text string, turn int64) (cause, control string) {
 
 // timeout kills the harness of a turn that ran out of time, then waits out a Prompt still in
 // flight (sent non-nil): the kill is what unblocks it.
-func (l *loop) timeout(turn int64, sent chan error) (cause, control string) {
-	after := short(l.cfg.TurnTimeout)
+func (l *loop) timeout(turn int64, sent chan error, limit time.Duration) (cause, control string) {
+	after := short(limit)
 	l.flushText()
 	l.logf("turn=%d timeout after %s", turn, after)
 	l.kill()

@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,6 +110,77 @@ func (c *Client) Feed(ctx context.Context, since int64) ([]Message, int64, error
 		}
 		since = r.Next
 	}
+}
+
+// RemoteCommand is a command addressed to this connector, with server-clock timestamps.
+type RemoteCommand struct {
+	ID        int64  `json:"id"`
+	Issuer    string `json:"issuer"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"createdAt"`
+	ExpiresAt int64  `json:"-"`
+	ServerNow int64  `json:"-"`
+}
+
+func (c *Client) NextCommand(ctx context.Context, expires int64) (*RemoteCommand, error) {
+	var r struct {
+		ServerNow int64          `json:"serverNow"`
+		Command   *RemoteCommand `json:"command"`
+	}
+	err := c.get(ctx, "/api/commands", nil, &r)
+	if err != nil || r.Command == nil {
+		return nil, err
+	}
+	r.Command.ServerNow = r.ServerNow
+	r.Command.ExpiresAt = r.Command.CreatedAt + expires
+	return r.Command, nil
+}
+
+func (c *Client) post(ctx context.Context, path string, body any, out any) error {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	u := c.base.JoinPath(path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrUnreachable, u.Redacted(), err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode/100 != 2 {
+		var e struct {
+			Err string `json:"err"`
+			Msg string `json:"msg"`
+		}
+		if json.Unmarshal(data, &e) == nil && e.Err != "" {
+			return &APIError{Status: resp.StatusCode, Code: e.Err, Msg: e.Msg}
+		}
+		return &APIError{Status: resp.StatusCode, Msg: string(data)}
+	}
+	return json.Unmarshal(data, out)
+}
+
+func (c *Client) AckCommand(ctx context.Context, id int64, status, reason string, expires int64) (string, error) {
+	var r struct {
+		Status string `json:"status"`
+	}
+	err := c.post(ctx, "/api/commands/"+strconv.FormatInt(id, 10)+"/ack", map[string]any{"status": status, "reason": reason, "expires": expires}, &r)
+	return r.Status, err
+}
+
+func (c *Client) PostNotice(ctx context.Context, thread int64, body string) error {
+	var r map[string]any
+	return c.post(ctx, "/api/threads/"+strconv.FormatInt(thread, 10)+"/msgs", map[string]any{"b": body}, &r)
 }
 
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {

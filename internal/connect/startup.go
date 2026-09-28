@@ -152,7 +152,14 @@ func (l *loop) startup() int {
 	shutdown := st.Shutdown != nil // the goodbye is still owed: no scan
 	st.Unlock()
 	if !shutdown { // commits a pending command first, then scans
-		shutdown = l.commands(true) == ReasonShutdown
+		action := l.commands(true)
+		if action == ReasonBlocked {
+			return 5
+		}
+		if action == ReasonKill {
+			return 0
+		}
+		shutdown = action == ReasonShutdown
 	}
 
 	st.Lock()
@@ -176,6 +183,9 @@ func (l *loop) startup() int {
 	}
 	if err := l.start(); err != nil {
 		l.logf("harness: %v", err)
+		if shutdown && l.shutdownExpired() {
+			return l.finish(true)
+		}
 		if errors.Is(err, driver.ErrPrerequisite) {
 			return 1
 		}

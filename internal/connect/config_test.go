@@ -38,6 +38,8 @@ func TestLoadErrors(t *testing.T) {
 		{"thread type", `{` + minimal + `,"thread":"8"}`, ": thread: must be a JSON int64, got string"},
 		{"operators type", `{` + minimal + `,"operators":"David"}`, ": operators: must be a JSON []string, got string"},
 		{"timeout type", `{` + minimal + `,"turnTimeout":30}`, ": turnTimeout: must be a JSON string, got number"},
+		{"command expiry type", `{` + minimal + `,"command_expires":"30m"}`, "command_expires: must be an integer"},
+		{"command expiry range", `{` + minimal + `,"command_expires":31536001}`, "commandExpires: must be 1..31536000"},
 		{"top-level array", `[]`, ": must be a JSON object, got array"},
 		{"trailing garbage", `{` + minimal + `} x`, "invalid character 'x' after top-level value"},
 		{"blank goal", `{` + minimal + `,"goal":"  "}`, "goal: required"},
@@ -65,7 +67,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Interval != 60 || c.TurnTimeout != 30*time.Minute || c.Cwd != filepath.Dir(p) || c.SystemPrompt != "" {
+	if c.Interval != 60 || c.CommandExpires != 1800 || c.TurnTimeout != 30*time.Minute || c.Cwd != filepath.Dir(p) || c.SystemPrompt != "" {
 		t.Fatalf("defaults: %+v", c)
 	}
 	if strings.Join(c.Operators, ",") != "TheRoot,gatekeeper" {
@@ -210,5 +212,18 @@ func TestLoadExample(t *testing.T) {
 	}
 	if c.Ignored != nil {
 		t.Fatalf("example sets unknown keys: %v", c.Ignored)
+	}
+}
+
+func TestCommandExpiresAlias(t *testing.T) {
+	for _, key := range []string{"command_expires", "commandExpires"} {
+		p := writeConfig(t, `{`+minimal+`,"`+key+`":45}`, 0o600)
+		c, err := LoadConfig(p, Overrides{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.CommandExpires != 45 {
+			t.Fatalf("%s: got %d", key, c.CommandExpires)
+		}
 	}
 }

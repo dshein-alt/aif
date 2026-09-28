@@ -55,7 +55,7 @@ func processRunning(t *testing.T, pid int) bool {
 	}
 	if runtime.GOOS == "linux" {
 		data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 			return false
 		}
 		if err != nil {

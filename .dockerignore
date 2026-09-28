@@ -3,7 +3,7 @@
 .env.*
 var
 data
+dev
 dist
-.aif-*.json
 README.md
 AGENTS.md

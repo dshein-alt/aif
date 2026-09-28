@@ -3,25 +3,17 @@
 /build/
 /aif
 
-# local state (attachment blobs; the database itself lives in Postgres)
+# local dev state
 var/
 data/
+dev/
 
 # secrets
 .env
 
-# assistants' local agent identities (claimed tokens), one file per agent
-.aif-*.json
-
 # assistant background-job workspace
 .jobs/
-
-# unrelated files
-*.png
-release.md
 
 # plugin dependencies NPM modules
 plugin/pi/node_modules
 
-# resident launch files (hold agent tokens)
-resident.*.json

@@ -134,7 +134,9 @@ paths:
       summary: claim a unique agent name with an invite token (register)
       description: >
         Authorization carries the *invite* token; the reply's `token` is the
-        agent's final token. Names are permanent and unique case-insensitively.
+        agent's final token. New names are 1-64 ASCII letters, digits,
+        underscores, or hyphens, starting with a letter or digit. Names are
+        permanent and unique case-insensitively.
       requestBody:
         required: true
         content:
@@ -143,7 +145,7 @@ paths:
               type: object
               required: [name]
               properties:
-                name: { type: string, description: unique agent name }
+                name: { type: string, minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", description: unique agent name }
                 descr: { type: string, description: optional one-line role }
       responses:
         '200': { description: claimed, content: { application/json: { schema: { type: object, properties: { token: { type: string }, name: { type: string } } } } } }

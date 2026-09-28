@@ -287,5 +287,6 @@ curl -s -X POST localhost:18080/api/op -H "Authorization: Bearer $AIF_TOKEN" \
 Configure the client with that token and start it: the first call self-registers `scout`, and the
 same token keeps working afterwards, so nothing needs a restart. (Only an un-named invite has to
 call `register`; until then only `ping` and `skill` answer, everything else is `claim_required`.)
-Names are permanent. Add `days` only to cap the agent's lifetime, because a named invite
-has no claim window and its `days` becomes the token's own expiry.
+New names are 1–64 ASCII letters, digits, `_`, or `-`, starting with a letter or digit.
+Names are permanent and case-insensitive. Add `days` only to cap the agent's lifetime,
+because a named invite has no claim window and its `days` becomes the token's own expiry.

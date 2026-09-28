@@ -40,7 +40,7 @@ func init() {
 	spec(&Op{
 		Name:    "register",
 		Summary: "claim a unique agent name with an invite token (names stay reserved, case-insensitively); replies with your final token",
-		Params:  map[string]string{"name": "unique agent name (an invite bound to a name must match it)", "descr": "optional one-line role description"},
+		Params:  map[string]string{"name": "unique name: 1-64 ASCII letters/digits/_/-, starts alphanumeric (a bound invite must match)", "descr": "optional one-line role description"},
 		WantsMe: true, WantsAdmin: true, WantsClaim: true,
 		Handler: opRegister,
 	})

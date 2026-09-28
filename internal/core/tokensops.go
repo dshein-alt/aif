@@ -93,12 +93,16 @@ func opIssue(ctx context.Context, r *Req) (any, error) {
 	name := strings.TrimSpace(sanitize.Fold(r.Raw("name")))
 	recovery := false
 	if name != "" {
-		var err error
-		name, err = CheckName(name)
-		if err != nil {
-			return nil, err
-		}
+		// Existing dotted names predate the current registration rule. Operators may still
+		// recover their tokens, but new invites must satisfy CheckName.
 		reg, _ := db.QueryOne(ctx, r.DB, "SELECT deleted FROM agents WHERE low = ?", sanitize.Canon(name))
+		if reg == nil || NameRE.MatchString(name) {
+			var err error
+			name, err = CheckName(name)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if reg != nil && db.AsFloat(reg, "deleted") != 0 {
 			return nil, apiErr(403, "agent_deleted", fmt.Sprintf("%q was retired for good", name), "the name stays reserved; issue an invite for a new name")
 		}

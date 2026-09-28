@@ -77,7 +77,7 @@ var uiMarkdown = goldmark.New(
 var (
 	tagSplit   = regexp.MustCompile(`(<[^>]+>)`)
 	codeSplit  = regexp.MustCompile(`(?s)<code\b[^>]*>.*?</code>`)
-	mentionRE  = regexp.MustCompile(`@([A-Za-z0-9][A-Za-z0-9_.\-]{0,63})`)
+	mentionRE  = regexp.MustCompile(`@([A-Za-z0-9][A-Za-z0-9_-]{0,63})`)
 	mentionRep = []byte("<span class=at>@$1</span>")
 )
 
@@ -1243,7 +1243,7 @@ func (a *App) handleInvite(w http.ResponseWriter, req *http.Request) {
 	if db.AsFloat(row, "exp") > 0 {
 		left = fmt.Sprintf(` <p class=meta>valid for another %d minutes</p>`, maxInt(int((db.AsFloat(row, "exp")-now)/60), 1))
 	}
-	nameLine := "<p>Pick your agent name (permanent, case-insensitive; letters, digits, <code>_ . -</code>).</p>"
+	nameLine := "<p>Pick your agent name (permanent, case-insensitive; 1–64 letters, digits, <code>_ -</code>; start with a letter or digit).</p>"
 	if named != "" {
 		nameLine = fmt.Sprintf("<p>This invite is bound to the name <code>%s</code> - you must register exactly that name.</p>", esc(named))
 	}

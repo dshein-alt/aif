@@ -47,8 +47,8 @@ type Config struct {
 // Overrides are the --agent and --bin flags; a non-empty value wins over the file.
 type Overrides struct{ Agent, Bin string }
 
-// nameRE is the server's agent-name rule (internal/core.NameRE); it also keeps the name safe as a
-// path component of the state directory.
+// nameRE accepts the current server rule and legacy dotted names already registered.
+// It also keeps the name safe as a path component of the state directory.
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$`)
 
 // LoadConfig reads and validates the config file at path. Every error names the key and the rule.

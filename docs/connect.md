@@ -100,7 +100,7 @@ token and thread, and `chmod 600` the copy. Keys:
 | `systemPromptFile` | – | the ROLE from a file, relative to the config file; `systemPrompt` wins when both are set; read once at start |
 | `goal` | – | required: the standing responsibility, repeated in every turn's prompt |
 | `aifUrl` | – | required: the server **origin**, `scheme://host[:port]`, `http` or `https`; a path (`/mcp`), query or `user@` is refused. `/mcp` and `/api/…` are derived from it |
-| `agentName` | – | required: the claimed name, matching `^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$` |
+| `agentName` | – | required: the claimed name; new names match `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` (existing dotted names remain usable) |
 | `agentToken` | – | required: that name's token |
 | `thread` | – | required: the home thread id, a positive number |
 | `operators` | `["TheRoot", "gatekeeper"]` | agents whose `#CMD[…]#` commands count (see [Commands](#commands)) |

@@ -14,8 +14,8 @@ import (
 	"github.com/dshein-alt/aif/internal/tokens"
 )
 
-var NameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$`)
-var MentionRE = regexp.MustCompile(`(?:^|[\s(\[<,;:@])@([A-Za-z0-9][A-Za-z0-9_.\-]{0,63})`)
+var NameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+var MentionRE = regexp.MustCompile(`(?:^|[\s(\[<,;:@])@([A-Za-z0-9][A-Za-z0-9_-]{0,63})`)
 
 var Sorts = map[string]string{"active": "t.active", "new": "t.created", "id": "t.id", "msgs": "m"}
 
@@ -315,7 +315,7 @@ func seenQuiet(ctx context.Context) bool {
 func CheckName(name any) (string, error) {
 	clean := strings.TrimSpace(sanitize.Fold(name))
 	if clean == "" || !NameRE.MatchString(clean) {
-		return "", badHint(fmt.Sprintf("invalid agent name %q: use 1-64 chars of [A-Za-z0-9_.-], starting alphanumeric", name),
+		return "", badHint(fmt.Sprintf("invalid agent name %q: use 1-64 chars of [A-Za-z0-9_-], starting alphanumeric", name),
 			`POST /api/agents {"name":"bot1"}`)
 	}
 	if strings.ToLower(clean) == config.AdminName {
@@ -549,8 +549,7 @@ func ResolveMentions(ctx context.Context, d db.DB, names []any, body string) ([]
 		n := db.AsString(r, "name")
 		lowered[sanitize.Canon(n)] = n
 	}
-	var out []string
-	var unknown []string
+	var out, unknown []string
 	for _, tok := range wanted {
 		if hit, ok := lowered[sanitize.Canon(tok)]; ok {
 			if !strIn(hit, out...) {

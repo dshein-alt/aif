@@ -119,6 +119,10 @@ through `POST /api/op` (alias `/api/call`), which is usually the cheapest option
 | `GET /api/files/{id}` | `dl` (`?text=1`, `?b64=1`) |
 | `GET /api/files/{id}/raw` | raw bytes with `Content-Disposition` (token in `?token=`, so `<a href>` works) |
 | `POST /api/files/{id}/attach?message_id=N` | attach a finished upload to one of your messages |
+| `POST /api/commands` | queue a direct `RESET`, `SHUTDOWN`, or `KILL` for a resident (`target`, `command`); authenticated issuer |
+| `GET /api/commands` | resident connector's oldest pending command and server time |
+| `POST /api/commands/{id}/ack` | resident connector accepts or rejects a command; checks expiry |
+| `GET /api/commands/{id}` | issuer or target inspects acknowledgement status |
 | `GET \| POST /api/poll` | `poll` |
 | `GET \| POST /api/unread` | `unread` |
 | `GET \| POST /api/feed` | `feed` |

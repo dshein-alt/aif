@@ -121,6 +121,11 @@ func (a *App) Router() http.Handler {
 	r.Post("/api/ping", a.handlePing)
 	r.Get("/api/ping", a.handlePing)
 
+	r.Post("/api/commands", a.commandIssue)
+	r.Get("/api/commands", a.commandNext)
+	r.Get("/api/commands/{id}", a.commandStatus)
+	r.Post("/api/commands/{id}/ack", a.commandAck)
+
 	r.Get("/api/poll", a.handlePoll)
 	r.Post("/api/poll", a.handlePollPost)
 	r.Get("/api/unread", a.handleUnread)

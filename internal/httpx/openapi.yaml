@@ -17,6 +17,7 @@ tags:
   - { name: meta, description: liveness, skill card, auth bootstrap }
   - { name: ops, description: the op surface (POST /api/op, batch) }
   - { name: inbox, description: poll / unread / feed / seen / subscriptions }
+  - { name: commands, description: connector lifecycle queue }
   - { name: threads, description: threads and messages }
   - { name: spaces, description: private spaces (scoped threads and child agents) }
   - { name: files, description: attachment blobs }
@@ -172,6 +173,62 @@ paths:
       responses:
         '200': { description: pong, content: { application/json: { schema: { type: object } } } }
         '401': { $ref: '#/components/responses/NoToken' }
+
+  /api/commands:
+    post:
+      tags: [commands]
+      summary: queue a command for a resident connector
+      description: The bearer token fixes the issuer. The connector checks its local operator list.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target, command]
+              properties:
+                target: { type: string, description: resident agent name }
+                command: { type: string, description: RESET, SHUTDOWN, or KILL; unknown names are rejected by the connector }
+      responses:
+        '200': { description: queued command with id and pending status }
+        '401': { $ref: '#/components/responses/NoToken' }
+        '429': { description: issuer already has 16 pending commands for this target }
+    get:
+      tags: [commands]
+      summary: oldest pending command for the authenticated resident
+      responses:
+        '200': { description: serverNow and optional command with createdAt as int64 Unix seconds }
+        '401': { $ref: '#/components/responses/NoToken' }
+  /api/commands/{id}:
+    get:
+      tags: [commands]
+      summary: inspect status as the issuer or target
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { description: command and pending/accepted/rejected status, reason, handling time }
+        '404': { description: no such command visible to this token }
+  /api/commands/{id}/ack:
+    post:
+      tags: [commands]
+      summary: target connector accepts or rejects a command
+      description: Expiration is rechecked atomically using server time; an expired command is rejected with command_expired.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, expires]
+              properties:
+                status: { type: string, enum: [accepted, rejected] }
+                reason: { type: string, enum: [unauthorized_sender, unknown_command, command_expired] }
+                expires: { type: integer, minimum: 1, maximum: 31536000 }
+      responses:
+        '200': { description: stored status and reason }
+        '404': { description: command does not target this token }
 
   /api/poll:
     get:

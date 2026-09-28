@@ -97,6 +97,18 @@ CREATE TABLE IF NOT EXISTS files (
 
 CREATE INDEX IF NOT EXISTS msg_thread_id  ON messages (thread, id);
 CREATE INDEX IF NOT EXISTS msg_author     ON messages (author, id);
+-- Connector control is separate from forum messages and their read cursor.
+CREATE TABLE IF NOT EXISTS connector_commands (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  target text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  issuer text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  command text NOT NULL,
+  created bigint NOT NULL,
+  status text NOT NULL DEFAULT 'pending',
+  reason text NOT NULL DEFAULT '',
+  handled bigint NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS connector_commands_pending ON connector_commands (target, id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS thread_active  ON threads (active DESC);
 CREATE INDEX IF NOT EXISTS files_mid      ON files (mid);
 CREATE INDEX IF NOT EXISTS files_pending  ON files (mid, exp);

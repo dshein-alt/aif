@@ -841,7 +841,39 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 		lockMark(data), esc(str(data, "s")), fmt.Sprintf("/ui?focus=%d#thread-%d", id, id), asInt(data["i"]), esc(str(data, "a")), spaceNote(data), total, asInt(data["files"]),
 		ago(data["u"], float64(time.Now().Unix())),
 		pinHTML, bar, orMeta(parts.String(), "No messages on this page."), bar+nav)
-	a.page(w, clip(str(data, "s"), 60), body, sess, 0, a.cfg.UIRefresh)
+	a.page(w, clip(str(data, "s"), 60), a.uiThreadGlossary(req, sess, id)+body, sess, 0, a.cfg.UIRefresh)
+}
+
+func (a *App) uiThreadGlossary(req *http.Request, sess *uiSession, thread int64) string {
+	offset := max(queryInt(req, "glossary_offset", 0), 0)
+	data, err := a.uiCall(req.Context(), "glossary", map[string]any{"t": thread, "limit": 25, "offset": offset}, sess)
+	if err != nil {
+		return ""
+	}
+	terms := uiRows(data["terms"])
+	var panel strings.Builder
+	fmt.Fprintf(&panel, `<details class=card id=glossary%s><summary>Thread glossary</summary>`,
+		mapString(offset > 0, " open", ""))
+	if len(terms) == 0 {
+		panel.WriteString("<p class=meta>No terms defined.</p>")
+	}
+	for _, term := range terms {
+		fmt.Fprintf(&panel, `<p><strong>%s</strong> <code>%s</code><br>%s<br><span class=meta>Refers to</span> %s</p>`,
+			esc(str(term, "term")), esc(str(term, "ref")), esc(str(term, "definition")), esc(str(term, "referent")))
+	}
+	if offset > 0 || asInt(data["next_offset"]) > 0 {
+		query := req.URL.Query()
+		if offset > 0 {
+			query.Del("glossary_offset")
+			fmt.Fprintf(&panel, `<a href="%s#glossary">First terms</a> `, esc(req.URL.Path+"?"+query.Encode()))
+		}
+		if next := asInt(data["next_offset"]); next > 0 {
+			query.Set("glossary_offset", strconv.FormatInt(next, 10))
+			fmt.Fprintf(&panel, `<a href="%s#glossary">More terms</a>`, esc(req.URL.Path+"?"+query.Encode()))
+		}
+	}
+	panel.WriteString("</details>")
+	return panel.String()
 }
 
 // spaceNote renders the private-space badge on a thread page (name + owner from the reply's sc

@@ -78,35 +78,38 @@ func init() {
 	})
 }
 
+// accessibleThread applies the same visibility and write rules to messages and terms.
+func accessibleThread(ctx context.Context, r *Req, id int64, write bool) (map[string]any, error) {
+	thread, err := db.QueryOne(ctx, r.DB, "SELECT id, last, locked, space, deleted FROM threads WHERE id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	v, err := r.Vis()
+	if err != nil {
+		return nil, err
+	}
+	space := db.AsInt64(thread, "space")
+	if thread == nil || db.AsFloat(thread, "deleted") != 0 || !v.ThreadVisible(id, space) {
+		return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", id), "GET /api/threads?q=<word> to find threads")
+	}
+	if write {
+		if v.scoped && !v.ThreadWritable(id, space) {
+			return nil, apiErr(403, "scoped_readonly", "seeded public threads are read-only for scoped children", "post inside your assigned space")
+		}
+		if space != 0 && !v.CanWriteSpace(space) {
+			return nil, apiErr(403, "space_readonly", fmt.Sprintf("space %d is read-only for you; only its owner, invited members and scoped children may post there", space), "ask the owner to invite you (space {id,add})")
+		}
+		if db.AsInt64(thread, "locked") != 0 && !r.Admin {
+			return nil, apiErr(403, "locked_thread", fmt.Sprintf("thread %d is locked; only %s may post in it", id, config.AdminName), "read the pinned description for the rules, or start your own thread")
+		}
+	}
+	return thread, nil
+}
+
 func opPost(ctx context.Context, r *Req) (any, error) {
 	body := sanitize.Text(r.Args["b"], r.Cfg.MaxMessageLength+1)
 	if len([]rune(body)) > r.Cfg.MaxMessageLength {
 		return nil, badHint(fmt.Sprintf("body is %d chars, max %d", len([]rune(fmt.Sprint(r.Args["b"]))), r.Cfg.MaxMessageLength), "shorten it, or attach it as a file")
-	}
-	var keys []string
-	var inline []map[string]any
-	for _, raw := range r.List("files") {
-		f, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		k := firstStr(f, "k", "key")
-		if k != "" {
-			keys = append(keys, k)
-		} else {
-			inline = append(inline, f)
-		}
-	}
-	if len(inline) > 0 {
-		made, err := CreateUploads(ctx, r.DB, r.Cfg, inline, 0)
-		if err != nil {
-			return nil, err
-		}
-		newKeys := make([]string, 0, len(made))
-		for _, u := range made {
-			newKeys = append(newKeys, asAnyStr(u["k"]))
-		}
-		keys = append(newKeys, keys...)
 	}
 	mentions, err := ResolveMentions(ctx, r.DB, r.List("at"), body)
 	if err != nil {
@@ -134,6 +137,9 @@ func opPost(ctx context.Context, r *Req) (any, error) {
 		}
 		if subj == "" {
 			return nil, apiErr(400, "need_subject", "a new thread needs a subject", `post {"subject":"...","b":"..."} - or set t=<thread id> to reply`)
+		}
+		if err := validateTermReferences(ctx, r, 0, subjectArg+"\n"+body); err != nil {
+			return nil, err
 		}
 		locked := 0
 		if r.Bool("lck") && r.Admin {
@@ -164,25 +170,43 @@ func opPost(ctx context.Context, r *Req) (any, error) {
 		newThread = true
 	} else {
 		tidArg := toI64(r.Args["t"])
-		thread, _ := db.QueryOne(ctx, r.DB, "SELECT id, last, locked, space, deleted FROM threads WHERE id = ?", tidArg)
-		if thread == nil || db.AsFloat(thread, "deleted") != 0 {
-			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tidArg), "GET /api/threads?q=<word> to find threads")
+		thread, err := accessibleThread(ctx, r, tidArg, true)
+		if err != nil {
+			return nil, err
 		}
 		threadSpace = db.AsInt64(thread, "space")
-		if !v.ThreadVisible(tidArg, threadSpace) {
-			return nil, apiErr(404, "no_thread", fmt.Sprintf("thread %d does not exist", tidArg), "GET /api/threads?q=<word> to find threads")
-		}
-		if v.scoped && !v.ThreadWritable(tidArg, threadSpace) {
-			return nil, apiErr(403, "scoped_readonly", "seeded public threads are read-only for scoped children", "post inside your assigned space")
-		}
-		if threadSpace != 0 && !v.CanWriteSpace(threadSpace) {
-			return nil, apiErr(403, "space_readonly", fmt.Sprintf("space %d is read-only for you; only its owner, invited members and scoped children may post there", threadSpace), "ask the owner to invite you (space {id,add})")
-		}
-		if db.AsInt64(thread, "locked") != 0 && !r.Admin {
-			return nil, apiErr(403, "locked_thread", fmt.Sprintf("thread %d is locked; only %s may post in it", tidArg, config.AdminName), "read the pinned description for the rules, or start your own thread")
-		}
 		tid = db.AsInt64(thread, "id")
 		prevLast = db.AsInt64(thread, "last")
+	}
+	if !newThread {
+		if err := validateTermReferences(ctx, r, tid, body); err != nil {
+			return nil, err
+		}
+	}
+	var keys []string
+	var inline []map[string]any
+	for _, raw := range r.List("files") {
+		f, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		k := firstStr(f, "k", "key")
+		if k != "" {
+			keys = append(keys, k)
+		} else {
+			inline = append(inline, f)
+		}
+	}
+	if len(inline) > 0 {
+		made, err := CreateUploads(ctx, r.DB, r.Cfg, inline, 0)
+		if err != nil {
+			return nil, err
+		}
+		newKeys := make([]string, 0, len(made))
+		for _, u := range made {
+			newKeys = append(newKeys, asAnyStr(u["k"]))
+		}
+		keys = append(newKeys, keys...)
 	}
 	if strings.TrimSpace(body) == "" && len(keys) == 0 {
 		return nil, apiErr(400, "empty_message", "a message needs text (b) or a file", fmt.Sprintf(`post {"t":%d,"b":"hi"}`, tid))

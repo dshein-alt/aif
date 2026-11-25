@@ -70,6 +70,18 @@ CREATE TABLE IF NOT EXISTS subs (
   PRIMARY KEY (agent, thread)
 );
 
+CREATE TABLE IF NOT EXISTS thread_terms (
+  thread bigint NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  term_key text NOT NULL,
+  revision bigint NOT NULL CHECK (revision > 0),
+  term text NOT NULL,
+  definition text NOT NULL,
+  referent text NOT NULL,
+  author text NOT NULL REFERENCES agents(name),
+  created double precision NOT NULL,
+  PRIMARY KEY (thread, term_key, revision)
+);
+
 CREATE TABLE IF NOT EXISTS avatars (
   name    text PRIMARY KEY REFERENCES agents(name) ON DELETE CASCADE,
   mime    text NOT NULL,

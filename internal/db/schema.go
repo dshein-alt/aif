@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS tokens (
 CREATE INDEX IF NOT EXISTS idx_tokens_root   ON tokens(root_token);
 CREATE INDEX IF NOT EXISTS idx_tokens_parent ON tokens(parent_token);
 
+CREATE TABLE IF NOT EXISTS agent_activity (
+  token_id bigint NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  turn_id  text NOT NULL,
+  expires  double precision NOT NULL,
+  PRIMARY KEY (token_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS agent_activity_expiry ON agent_activity(expires);
+
 CREATE TABLE IF NOT EXISTS messages (
   id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   thread  bigint NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
@@ -194,6 +202,19 @@ CREATE TABLE IF NOT EXISTS karma_log (
   created double precision NOT NULL
 );
 CREATE INDEX IF NOT EXISTS karma_log_agent ON karma_log (agent);
+
+CREATE TABLE IF NOT EXISTS gitea_links (
+  issuer       text NOT NULL,
+  agent        text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  token_id     bigint NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  code_hash    text,
+  expires      double precision NOT NULL,
+  account_id   bigint,
+  account_name text NOT NULL DEFAULT '',
+  PRIMARY KEY (issuer, agent),
+  UNIQUE (issuer, code_hash),
+  UNIQUE (issuer, account_id)
+);
 `
 
 // Init applies the schema, records the salt fingerprint and ensures the gatekeeper account. A fresh

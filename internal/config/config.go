@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ type Config struct {
 	InviteTTL          int
 	PublicURL          string
 	WebToken           string
+	GiteaOAuth         GiteaOAuth
 	UISessionTTL       int
 	UIRefresh          int
 	DataDir            string
@@ -53,6 +55,26 @@ type Config struct {
 	Seed               bool
 	// PostgreSQL
 	PGURL string
+}
+
+// GiteaOAuth lets Gitea users read public threads in the browser UI.
+type GiteaOAuth struct {
+	URL          string
+	ClientID     string
+	ClientSecret string
+}
+
+func (c *Config) GiteaOAuthEnabled() bool {
+	g := c.GiteaOAuth
+	return g.ClientID != "" && g.ClientSecret != "" &&
+		validHTTPBase(g.URL, true) && validHTTPBase(c.PublicURL, false)
+}
+
+func validHTTPBase(value string, allowPath bool) bool {
+	u, err := url.Parse(value)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") &&
+		u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery &&
+		!strings.Contains(value, "#") && (allowPath || u.Path == "")
 }
 
 var suffixes = map[string]int64{"": 1, "B": 1, "KB": 1024, "K": 1024, "MB": 1024 * 1024, "M": 1024 * 1024, "GB": 1024 * 1024 * 1024, "G": 1024 * 1024 * 1024}
@@ -155,12 +177,17 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Tokens:             tokens,
-		AdminTokens:        adminTokens,
-		TokenSalt:          envStr("AIF_TOKEN_SALT", DefaultSalt),
-		InviteTTL:          envInt("AIF_INVITE_TTL", 86400),
-		PublicURL:          strings.TrimRight(envStr("AIF_PUBLIC_URL", ""), "/"),
-		WebToken:           envStr("AIF_WEB_TOKEN", ""),
+		Tokens:      tokens,
+		AdminTokens: adminTokens,
+		TokenSalt:   envStr("AIF_TOKEN_SALT", DefaultSalt),
+		InviteTTL:   envInt("AIF_INVITE_TTL", 86400),
+		PublicURL:   strings.TrimRight(envStr("AIF_PUBLIC_URL", ""), "/"),
+		WebToken:    envStr("AIF_WEB_TOKEN", ""),
+		GiteaOAuth: GiteaOAuth{
+			URL:          strings.TrimRight(strings.TrimSpace(os.Getenv("AIF_GITEA_URL")), "/"),
+			ClientID:     strings.TrimSpace(os.Getenv("AIF_GITEA_CLIENT_ID")),
+			ClientSecret: strings.TrimSpace(os.Getenv("AIF_GITEA_CLIENT_SECRET")),
+		},
 		UISessionTTL:       envInt("AIF_UI_SESSION_TTL", 43200),
 		UIRefresh:          envInt("AIF_UI_REFRESH", 120),
 		DataDir:            dataDir,
@@ -227,6 +254,9 @@ func (c *Config) Validate() []string {
 	}
 	if c.TokenSalt == "" {
 		return []string{"ERROR: AIF_TOKEN_SALT is empty"}
+	}
+	if (c.GiteaOAuth != GiteaOAuth{}) && !c.GiteaOAuthEnabled() {
+		warnings = append(warnings, "Gitea UI login disabled: configure AIF_GITEA_URL, AIF_GITEA_CLIENT_ID, AIF_GITEA_CLIENT_SECRET and AIF_PUBLIC_URL")
 	}
 	if c.TokenSalt == DefaultSalt && !c.AllowDefaultToken {
 		return []string{fmt.Sprintf("ERROR: AIF_TOKEN_SALT is insecure default %q", DefaultSalt)}

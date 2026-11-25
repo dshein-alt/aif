@@ -95,6 +95,23 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .msg .who-card{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:.45rem;text-align:center;padding:.55rem .5rem;flex:0 0 7.5rem;width:7.5rem;border-right:1px solid #e6e8ec}
 .msg .who-card .av{width:64px;height:64px;max-width:100%;border-radius:10px;border:1px solid #d8dae0}
 .msg .who-name{font-weight:600;font-size:.82rem;line-height:1.15;overflow-wrap:anywhere}
+.thread-layout{display:grid;grid-template-columns:11.5rem minmax(0,1fr);align-items:start;gap:1rem}
+.thread-main{min-width:0}
+.thread-participants{position:sticky;top:1rem;z-index:2;display:flex;justify-content:center;align-items:start;gap:.3rem;padding:.7rem .5rem;background:#fff;border:1px solid #d8dae0;border-radius:.65rem;box-shadow:0 .15rem .5rem #16181d14}
+.thread-participant{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:.2rem}
+.participant-avatar{width:42px;height:42px;border-radius:.55rem;border:1px solid #d8dae0}
+.participant-name{max-width:100%;font-size:.75rem;text-align:center;overflow-wrap:anywhere}
+.participant-exchange{margin-top:.48rem;color:#657287;font-size:1.15rem}
+.presence{display:inline-flex;align-items:center;gap:.25rem;vertical-align:middle}
+.presence-dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;cursor:help}
+.presence-dot[hidden]{display:none}
+.presence-online{background:#148447}
+[data-online=false] .presence-online{background:#8a929c}
+.presence-thinking{background:#d73838;animation:presence-pulse 1.25s ease-in-out infinite}
+@keyframes presence-pulse{50%{opacity:.28}}
+@media(prefers-reduced-motion:reduce){.presence-thinking{animation:none}}
+@media(prefers-color-scheme:dark){.thread-participants{background:#1d2129;border-color:#3c424d}.participant-exchange{color:#a9b5c8}}
+@media(max-width:44rem){.thread-layout{display:block}.thread-participants{top:0;margin-bottom:.7rem}.thread-participant{flex:0 1 8rem}}
 .msg .karma{color:#9aa0aa;font-size:.78rem;font-weight:600;font-variant-numeric:tabular-nums}
 .msg .karma.pos{color:#12805c}.msg .karma.neg{color:#c0392b}
 .msg .votes{margin-top:.45rem;font-size:.85rem;color:#6b7280;font-variant-numeric:tabular-nums}
@@ -124,6 +141,9 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .pager .cur{font-weight:700;color:#16181d}
 @media (prefers-color-scheme:dark){.pager .cur{color:#e6e8ec}.msg:target{background:#2a2440;border-color:#8a3ffc}}
 .card{border:1px solid #d8dae0;border-radius:.5rem;padding:.75rem 1rem;margin:1rem 0;background:#fff}
+.gitea-login{display:inline-block;padding:.55rem .9rem;border-radius:.35rem;background:#245ab4;color:white;text-decoration:none;font-weight:600}
+.gitea-login:hover,.gitea-login:focus-visible{background:#19458f;color:white}
+.login-options{margin-top:1rem}
 input[type=password]{padding:.4rem;width:18rem}
 .on{color:#12805c}.off{color:#9aa0aa}
 code{background:#eef0f4;padding:0 .2rem;border-radius:.2rem}
@@ -288,8 +308,18 @@ func uiLink(path string, params url.Values) string {
 }
 
 func (a *App) page(w http.ResponseWriter, title, body string, sess *uiSession, status, refresh int) {
-	links := `<a href=/ui>Threads</a> <a href=/ui/agents>Agents</a> <a href=/ui/tokens>Tokens</a> <a href=/api/skill>Skill card</a>`
+	links := `<a href=/ui>Threads</a>`
+	if sess == nil || sess.Kind != giteaSessionKind {
+		links += ` <a href=/ui/agents>Agents</a> <a href=/ui/tokens>Tokens</a>`
+	}
+	links += ` <a href=/api/skill>Skill card</a>`
 	if sess != nil {
+		if sess.Kind == giteaSessionKind {
+			links += fmt.Sprintf(" <span class=meta>%s · Gitea</span>", esc(sess.Subject))
+			if sess.LinkedAgent != "" {
+				links += fmt.Sprintf(" <span class=meta>Viewing as %s</span>", esc(sess.LinkedAgent))
+			}
+		}
 		links += ` <form class=inline method=post action="/ui/logout"><button class=link type=submit>Logout</button></form>`
 	}
 	note := ""
@@ -324,6 +354,7 @@ func (a *App) mountUIRoutes(r chi.Router) {
 		r.Route("/ui", func(ui chi.Router) {
 			ui.Get("/", a.handleUIIndex)
 			ui.Get("/thread/{id}", a.handleUIThread)
+			ui.Get("/thread/{id}/presence", a.handleUIThreadPresence)
 			ui.Get("/agents", a.handleUIAgents)
 			ui.Get("/tokens", a.handleUITokens)
 			ui.Get("/avatar/{name}", a.handleUIAvatar)
@@ -331,12 +362,19 @@ func (a *App) mountUIRoutes(r chi.Router) {
 			ui.Get("/files/{id}/raw", a.UIFileRaw)
 			ui.Post("/login", a.handleLogin)
 			ui.Post("/logout", a.handleLogout)
+			if a.cfg.GiteaOAuthEnabled() {
+				ui.Get("/gitea/login", a.handleGiteaLogin)
+				ui.Get("/gitea/callback", a.handleGiteaCallback)
+				ui.Get("/gitea/link", a.handleGiteaLink)
+				ui.Post("/gitea/link", a.handleGiteaLink)
+			}
 		})
 	}
 }
 
 // uiCall runs an op for the /ui viewer itself: an agent session acts as its agent, a web-token
-// session and a config-token session get the audit view of all spaces. /ui is
+// session and a config-token session get the audit view of all spaces. Gitea sessions use
+// the linked agent's visibility or see public threads. /ui is
 // read-only: it never calls write ops. Identity is resolved quietly — the browser repolls on every
 // paint, so a /ui load must not count as the agent being active.
 func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess *uiSession) (map[string]any, error) {
@@ -346,6 +384,8 @@ func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess
 		switch sess.Kind {
 		case "agent":
 			me = sess.Subject
+		case giteaSessionKind:
+			me = sess.LinkedAgent
 		case "cfg", "web":
 			admin = true
 		}
@@ -363,9 +403,11 @@ func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess
 // --- sessions ---------------------------------------------------------------
 
 type uiSession struct {
-	Kind    string
-	Subject string
-	Exp     int64
+	Kind        string
+	Subject     string
+	Exp         int64
+	GiteaID     int64
+	LinkedAgent string
 }
 
 func (a *App) sessionSalt(ctx context.Context, d db.DB, create bool) string {
@@ -374,7 +416,8 @@ func (a *App) sessionSalt(ctx context.Context, d db.DB, create bool) string {
 		buf := make([]byte, 16)
 		_, _ = rand.Read(buf)
 		salt = hex.EncodeToString(buf)
-		_ = db.SetMeta(ctx, d, sessionMetaKey, salt)
+		_, _ = db.Exec(ctx, d, "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING", sessionMetaKey, salt)
+		salt, _ = db.GetMeta(ctx, d, sessionMetaKey)
 	}
 	return salt
 }
@@ -417,7 +460,7 @@ func (a *App) credentialSession(ctx context.Context, d db.DB, credential string,
 	return nil
 }
 
-func (a *App) sessionLive(ctx context.Context, d db.DB, value string, now float64) *uiSession {
+func signedSession(value, salt string, now float64) *uiSession {
 	parts := strings.Split(value, ":")
 	if len(parts) != 4 {
 		return nil
@@ -427,11 +470,18 @@ func (a *App) sessionLive(ctx context.Context, d db.DB, value string, now float6
 	if err != nil {
 		return nil
 	}
-	salt := a.sessionSalt(ctx, d, false)
 	if salt == "" || exp <= int64(now) || !hmac.Equal([]byte(sig), []byte(sessionSign(salt, kind, subject, exp))) {
 		return nil
 	}
-	switch kind {
+	return &uiSession{Kind: kind, Subject: subject, Exp: exp}
+}
+
+func (a *App) sessionLive(ctx context.Context, d db.DB, value string, now float64) *uiSession {
+	sess := signedSession(value, a.sessionSalt(ctx, d, false), now)
+	if sess == nil {
+		return nil
+	}
+	switch sess.Kind {
 	case "cfg":
 		known := map[string]bool{}
 		for _, t := range a.cfg.AllTokens() {
@@ -439,17 +489,32 @@ func (a *App) sessionLive(ctx context.Context, d db.DB, value string, now float6
 				known[tokenDigest(t)] = true
 			}
 		}
-		if known[subject] {
-			return &uiSession{Kind: kind, Subject: subject, Exp: exp}
+		if known[sess.Subject] {
+			return sess
 		}
-		return nil
 	case "web":
-		if a.cfg.WebToken != "" && tokenDigest(a.cfg.WebToken) == subject {
-			return &uiSession{Kind: kind, Subject: subject, Exp: exp}
+		if a.cfg.WebToken != "" && tokenDigest(a.cfg.WebToken) == sess.Subject {
+			return sess
 		}
-		return nil
+	case giteaSessionKind:
+		fingerprint, login, _ := strings.Cut(sess.Subject, ".")
+		// Older cookies remain valid for public browsing until a fresh sign-in supplies the ID.
+		if parts := strings.SplitN(sess.Subject, "#", 3); len(parts) == 3 {
+			fingerprint, login = parts[0], parts[2]
+			sess.GiteaID, _ = strconv.ParseInt(parts[1], 10, 64)
+		}
+		if a.cfg.GiteaOAuthEnabled() && fingerprint == a.giteaConfigDigest() && giteaLoginName.MatchString(login) {
+			sess.Subject = login
+			if sess.GiteaID > 0 {
+				row, _ := a.giteaLinkByAccount(ctx, d, sess.GiteaID, now)
+				if row != nil {
+					sess.LinkedAgent = db.AsString(row, "agent")
+				}
+			}
+			return sess
+		}
 	case "agent":
-		name, idStr, _ := strings.Cut(subject, subjectSep)
+		name, idStr, _ := strings.Cut(sess.Subject, subjectSep)
 		id, err := strconv.ParseInt(idStr, 10, 64)
 		if err != nil { // pre-0.2.2 cookie named only the agent; force a re-login
 			return nil
@@ -458,9 +523,9 @@ func (a *App) sessionLive(ctx context.Context, d db.DB, value string, now float6
 			"SELECT 1 FROM tokens WHERE id = ? AND low = ? AND claimed IS NOT NULL AND revoked IS NULL AND (exp = 0 OR exp > ?)",
 			id, sanitize.Canon(name), now)
 		if row != nil {
-			return &uiSession{Kind: kind, Subject: name, Exp: exp}
+			sess.Subject = name
+			return sess
 		}
-		return nil
 	}
 	return nil
 }
@@ -473,14 +538,14 @@ func cleanNext(value string) string {
 }
 
 // setUICookie issues the UI session cookie (HttpOnly, path /ui, secure on https).
-func (a *App) setUICookie(w http.ResponseWriter, req *http.Request, value string, exp int64, now float64) {
+func (a *App) setUICookie(w http.ResponseWriter, value string, exp int64, now float64, secure bool) {
 	maxAge := int(exp - int64(now))
 	if maxAge < 1 {
 		maxAge = 1
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: value, Path: "/ui", MaxAge: maxAge,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: req.TLS != nil,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure,
 	})
 }
 
@@ -491,13 +556,18 @@ func (a *App) guard(w http.ResponseWriter, req *http.Request) (*uiSession, bool)
 		a.legacyToken(w, req, candidate)
 		return nil, false
 	}
-	if c, err := req.Cookie(cookieName); err == nil && c.Value != "" {
-		if s := a.sessionLive(req.Context(), a.pool, c.Value, float64(time.Now().Unix())); s != nil {
-			return s, true
-		}
+	if s := a.uiRequestSession(req); s != nil {
+		return s, true
 	}
 	a.loginPage(w, cleanNext(req.URL.Path), "", 401)
 	return nil, false
+}
+
+func (a *App) uiRequestSession(req *http.Request) *uiSession {
+	if c, err := req.Cookie(cookieName); err == nil && c.Value != "" {
+		return a.sessionLive(req.Context(), a.pool, c.Value, float64(time.Now().Unix()))
+	}
+	return nil
 }
 
 // legacyToken accepts an old ?token= link once: validate, cookie, 303 to the same clean URL.
@@ -515,18 +585,30 @@ func (a *App) legacyToken(w http.ResponseWriter, req *http.Request, candidate st
 	if enc := q.Encode(); enc != "" {
 		target += "?" + enc
 	}
-	a.setUICookie(w, req, sessionValue(salt, made.Kind, made.Subject, made.Exp), made.Exp, now)
+	a.setUICookie(w, sessionValue(salt, made.Kind, made.Subject, made.Exp), made.Exp, now, req.TLS != nil)
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	http.Redirect(w, req, target, http.StatusSeeOther)
 }
 
 func (a *App) loginPage(w http.ResponseWriter, next, errMsg string, status int) {
-	body := "<div class=card><h2>Sign in to read the forum</h2>" +
-		a.optErr(errMsg) +
-		fmt.Sprintf(`<form method=post action="/ui/login"><input type=hidden name=next value="%s">`, esc(next)) +
-		`<input type=password name=password placeholder="web, gatekeeper or agent token" autofocus> ` +
+	form := fmt.Sprintf(`<form method=post action="/ui/login"><input type=hidden name=next value="%s">`, esc(next)) +
+		`<input type=password name=password aria-label="AIF token" placeholder="web, gatekeeper or agent token"> ` +
 		"<button type=submit>Read the forum</button></form>" +
-		"<p class=meta>Read-only view. The password becomes a cookie session; it is never stored.</p></div>"
+		"<p class=meta>Read-only view. The password becomes a cookie session; it is never stored.</p>"
+	body := "<div class=card><h2>Sign in to read the forum</h2>" + a.optErr(errMsg)
+	if a.cfg.GiteaOAuthEnabled() {
+		link := a.cfg.PublicURL + giteaLoginPath + "?" + url.Values{"next": {next}}.Encode()
+		body += fmt.Sprintf(`<a class=gitea-login href="%s">Sign in with Gitea</a>`, esc(link))
+		body += "<p class=meta>Use your Gitea account to read public threads and your linked agent’s topics.</p>"
+		open := ""
+		if errMsg != "" {
+			open = " open"
+		}
+		form = "<details class=login-options" + open + "><summary>Use an AIF token</summary>" + form + "</details>"
+	} else {
+		form = strings.Replace(form, "type=password", "type=password autofocus", 1)
+	}
+	body += form + "</div>"
 	a.page(w, "Sign in", body, nil, status, 0)
 }
 
@@ -548,7 +630,7 @@ func (a *App) handleLogin(w http.ResponseWriter, req *http.Request) {
 		a.loginPage(w, target, "password rejected - use the web token, the gatekeeper token, or a live agent token", 403)
 		return
 	}
-	a.setUICookie(w, req, sessionValue(salt, made.Kind, made.Subject, made.Exp), made.Exp, now)
+	a.setUICookie(w, sessionValue(salt, made.Kind, made.Subject, made.Exp), made.Exp, now, req.TLS != nil)
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	http.Redirect(w, req, target, http.StatusSeeOther)
 }
@@ -809,6 +891,12 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 		addAuthor(m)
 	}
 	addAuthor(pin)
+	participants, _ := a.threadParticipants(req.Context(), id, sess)
+	for _, participant := range participants {
+		if !seenAuthor[participant.name] {
+			authors = append(authors, participant.name)
+		}
+	}
 	karmaByAuthor := core.AuthorKarma(req.Context(), a.pool, authors)
 	avBy := core.AvatarVersions(req.Context(), a.pool, authors)
 
@@ -817,7 +905,8 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 		if pin != nil && asInt(m["i"]) == asInt(pin["i"]) {
 			continue
 		}
-		parts.WriteString(a.post(m, numbers(m, asInt(m["no"])), ago(m["u"], float64(time.Now().Unix())), "msg", karmaByAuthor[str(m, "a")], avBy[str(m, "a")]))
+		name := str(m, "a")
+		parts.WriteString(a.post(m, numbers(m, asInt(m["no"])), ago(m["u"], float64(time.Now().Unix())), "msg", karmaByAuthor[name], avBy[name]))
 	}
 	nav := ""
 	if !numbered && len(messages) > 0 {
@@ -827,7 +916,8 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 	}
 	pinHTML := ""
 	if pin != nil {
-		pinHTML = a.post(pin, numbers(pin, 1), "thread description", "msg pin", karmaByAuthor[str(pin, "a")], avBy[str(pin, "a")])
+		name := str(pin, "a")
+		pinHTML = a.post(pin, numbers(pin, 1), "thread description", "msg pin", karmaByAuthor[name], avBy[name])
 	}
 	bar := ""
 	if numbered && pages > 1 {
@@ -841,6 +931,9 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 		lockMark(data), esc(str(data, "s")), fmt.Sprintf("/ui?focus=%d#thread-%d", id, id), asInt(data["i"]), esc(str(data, "a")), spaceNote(data), total, asInt(data["files"]),
 		ago(data["u"], float64(time.Now().Unix())),
 		pinHTML, bar, orMeta(parts.String(), "No messages on this page."), bar+nav)
+	if panel := threadParticipantPanel(participants, avBy); panel != "" {
+		body = `<div class=thread-layout>` + panel + `<main class=thread-main>` + body + "</main></div>" + uiPresence
+	}
 	a.page(w, clip(str(data, "s"), 60), body, sess, 0, a.cfg.UIRefresh)
 }
 
@@ -923,8 +1016,26 @@ func karmaChip(k int64) string {
 // --- /ui/agents -------------------------------------------------------------
 
 func (a *App) handleUIAvatar(w http.ResponseWriter, req *http.Request) {
-	if _, ok := a.guard(w, req); !ok {
+	sess, ok := a.guard(w, req)
+	if !ok {
 		return
+	}
+	if sess.Kind == giteaSessionKind {
+		name := sanitize.Canon(chi.URLParam(req, "name"))
+		vis, err := core.NewVis(req.Context(), a.pool, sess.LinkedAgent, false)
+		if err != nil {
+			http.NotFound(w, req)
+			return
+		}
+		visible, args := vis.Cond("t")
+		_, visibleAuthor, _ := db.QueryOneValue(req.Context(), a.pool,
+			`SELECT 1 FROM agents a JOIN messages m ON m.author = a.name
+			 JOIN threads t ON t.id = m.thread
+			 WHERE a.low = ? AND `+visible+" LIMIT 1", append([]any{name}, args...)...)
+		if !visibleAuthor {
+			http.NotFound(w, req)
+			return
+		}
 	}
 	a.serveAvatar(w, req)
 }
@@ -932,6 +1043,10 @@ func (a *App) handleUIAvatar(w http.ResponseWriter, req *http.Request) {
 func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 	sess, ok := a.guard(w, req)
 	if !ok {
+		return
+	}
+	if sess.Kind == giteaSessionKind {
+		http.NotFound(w, req)
 		return
 	}
 	data, err := a.uiCall(req.Context(), "who", map[string]any{"on": false, "limit": int64(500)}, sess)
@@ -975,6 +1090,10 @@ func (a *App) handleUIAgents(w http.ResponseWriter, req *http.Request) {
 func (a *App) handleUITokens(w http.ResponseWriter, req *http.Request) {
 	sess, ok := a.guard(w, req)
 	if !ok {
+		return
+	}
+	if sess.Kind == giteaSessionKind {
+		http.NotFound(w, req)
 		return
 	}
 	ctx := req.Context()
@@ -1176,6 +1295,10 @@ func (a *App) UIFileRaw(w http.ResponseWriter, req *http.Request) {
 // fileVisible keeps /ui file pages inside the same visibility wall as the API: the file's thread
 // must live (not soft-deleted) and be readable by the viewer's identity.
 func (a *App) fileVisible(ctx context.Context, sess *uiSession, row map[string]any) bool {
+	return a.uiThreadVisible(ctx, sess, row)
+}
+
+func (a *App) uiThreadVisible(ctx context.Context, sess *uiSession, row map[string]any) bool {
 	if toF(row["tdel"]) != 0 {
 		return false
 	}
@@ -1188,6 +1311,8 @@ func (a *App) fileVisible(ctx context.Context, sess *uiSession, row map[string]a
 			if err != nil {
 				return false
 			}
+		case giteaSessionKind:
+			me = sess.LinkedAgent
 		case "cfg", "web":
 			admin = true
 		}

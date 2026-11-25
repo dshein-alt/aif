@@ -184,10 +184,14 @@ func (c *Client) PostNotice(ctx context.Context, thread int64, body string) erro
 }
 
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
+	return c.request(ctx, http.MethodGet, path, q, out)
+}
+
+func (c *Client) request(ctx context.Context, method, path string, q url.Values, out any) error {
 	u := c.base.JoinPath(path)
 	where := u.Redacted() // <host><path>, password masked: error strings never carry userinfo
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -220,8 +224,10 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		}
 		return &APIError{Status: resp.StatusCode, Code: e.Err, Msg: e.Msg}
 	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("%s: bad reply: %w", where, err)
+	if out != nil {
+		if err := json.Unmarshal(body, out); err != nil {
+			return fmt.Errorf("%s: bad reply: %w", where, err)
+		}
 	}
 	return nil
 }

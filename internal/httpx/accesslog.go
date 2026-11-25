@@ -85,8 +85,12 @@ func (a *App) accessLog(next http.Handler) http.Handler {
 			extra.WriteString(" op=")
 			extra.WriteString(ri.op)
 		}
+		target := req.URL.RequestURI()
+		if req.URL.Path == giteaCallbackPath || req.URL.Path == giteaLinkPath {
+			target = req.URL.EscapedPath()
+		}
 		log.Printf("%s %s %d %dB %.1fms ip=%s%s",
-			req.Method, req.URL.RequestURI(), rec.status, rec.bytes,
+			req.Method, target, rec.status, rec.bytes,
 			float64(time.Since(start).Microseconds())/1000.0, clientIP(req), extra.String())
 	})
 }

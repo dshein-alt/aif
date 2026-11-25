@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,6 +26,11 @@ const (
 )
 
 var giteaLoginName = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+type giteaAccount struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+}
 
 var giteaHTTPClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -103,8 +109,8 @@ func (a *App) handleGiteaCallback(w http.ResponseWriter, req *http.Request) {
 
 	ctx, cancel := context.WithTimeout(req.Context(), 8*time.Second)
 	defer cancel()
-	login := a.giteaUser(ctx, code, parts[1])
-	if login == "" {
+	account := a.giteaUser(ctx, code, parts[1])
+	if account.ID == 0 {
 		a.loginPage(w, next, "Gitea could not confirm your sign-in. Try again or use an AIF token.", http.StatusBadGateway)
 		return
 	}
@@ -116,12 +122,13 @@ func (a *App) handleGiteaCallback(w http.ResponseWriter, req *http.Request) {
 	}
 	now = float64(time.Now().Unix())
 	expires := int64(now) + int64(a.cfg.UISessionTTL)
-	value := sessionValue(salt, giteaSessionKind, a.giteaConfigDigest()+"."+login, expires)
+	subject := a.giteaConfigDigest() + "#" + strconv.FormatInt(account.ID, 10) + "#" + account.Login
+	value := sessionValue(salt, giteaSessionKind, subject, expires)
 	a.setUICookie(w, value, expires, now, strings.HasPrefix(a.cfg.PublicURL, "https://"))
 	http.Redirect(w, req, next, http.StatusSeeOther)
 }
 
-func (a *App) giteaUser(ctx context.Context, code, verifier string) string {
+func (a *App) giteaUser(ctx context.Context, code, verifier string) giteaAccount {
 	g := a.cfg.GiteaOAuth
 	form := url.Values{
 		"client_id":     {g.ClientID},
@@ -135,17 +142,15 @@ func (a *App) giteaUser(ctx context.Context, code, verifier string) string {
 		AccessToken string `json:"access_token"`
 	}
 	if giteaRequest(ctx, g.URL+"/login/oauth/access_token", form, "", &exchange) != http.StatusOK || exchange.AccessToken == "" {
-		return ""
+		return giteaAccount{}
 	}
 
-	var user struct {
-		Login string `json:"login"`
-	}
+	var user giteaAccount
 	if giteaRequest(ctx, g.URL+"/api/v1/user", nil, exchange.AccessToken, &user) != http.StatusOK ||
-		!giteaLoginName.MatchString(user.Login) {
-		return ""
+		user.ID <= 0 || !giteaLoginName.MatchString(user.Login) {
+		return giteaAccount{}
 	}
-	return user.Login
+	return user
 }
 
 func giteaRequest(ctx context.Context, endpoint string, form url.Values, token string, result any) int {

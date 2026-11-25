@@ -298,8 +298,10 @@ func (a *App) page(w http.ResponseWriter, title, body string, sess *uiSession, s
 	links += ` <a href=/api/skill>Skill card</a>`
 	if sess != nil {
 		if sess.Kind == giteaSessionKind {
-			_, login, _ := strings.Cut(sess.Subject, ".")
-			links += fmt.Sprintf(" <span class=meta>%s · Gitea</span>", esc(login))
+			links += fmt.Sprintf(" <span class=meta>%s · Gitea</span>", esc(sess.Subject))
+			if sess.LinkedAgent != "" {
+				links += fmt.Sprintf(" <span class=meta>Viewing as %s</span>", esc(sess.LinkedAgent))
+			}
 		}
 		links += ` <form class=inline method=post action="/ui/logout"><button class=link type=submit>Logout</button></form>`
 	}
@@ -345,14 +347,16 @@ func (a *App) mountUIRoutes(r chi.Router) {
 			if a.cfg.GiteaOAuthEnabled() {
 				ui.Get("/gitea/login", a.handleGiteaLogin)
 				ui.Get("/gitea/callback", a.handleGiteaCallback)
+				ui.Get("/gitea/link", a.handleGiteaLink)
+				ui.Post("/gitea/link", a.handleGiteaLink)
 			}
 		})
 	}
 }
 
 // uiCall runs an op for the /ui viewer itself: an agent session acts as its agent, a web-token
-// session and a config-token session get the audit view of all spaces. Gitea sessions see
-// public threads. /ui is
+// session and a config-token session get the audit view of all spaces. Gitea sessions use
+// the linked agent's visibility or see public threads. /ui is
 // read-only: it never calls write ops. Identity is resolved quietly — the browser repolls on every
 // paint, so a /ui load must not count as the agent being active.
 func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess *uiSession) (map[string]any, error) {
@@ -362,6 +366,8 @@ func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess
 		switch sess.Kind {
 		case "agent":
 			me = sess.Subject
+		case giteaSessionKind:
+			me = sess.LinkedAgent
 		case "cfg", "web":
 			admin = true
 		}
@@ -379,9 +385,11 @@ func (a *App) uiCall(ctx context.Context, name string, args map[string]any, sess
 // --- sessions ---------------------------------------------------------------
 
 type uiSession struct {
-	Kind    string
-	Subject string
-	Exp     int64
+	Kind        string
+	Subject     string
+	Exp         int64
+	GiteaID     int64
+	LinkedAgent string
 }
 
 func (a *App) sessionSalt(ctx context.Context, d db.DB, create bool) string {
@@ -472,7 +480,19 @@ func (a *App) sessionLive(ctx context.Context, d db.DB, value string, now float6
 		}
 	case giteaSessionKind:
 		fingerprint, login, _ := strings.Cut(sess.Subject, ".")
+		// Older cookies remain valid for public browsing until a fresh sign-in supplies the ID.
+		if parts := strings.SplitN(sess.Subject, "#", 3); len(parts) == 3 {
+			fingerprint, login = parts[0], parts[2]
+			sess.GiteaID, _ = strconv.ParseInt(parts[1], 10, 64)
+		}
 		if a.cfg.GiteaOAuthEnabled() && fingerprint == a.giteaConfigDigest() && giteaLoginName.MatchString(login) {
+			sess.Subject = login
+			if sess.GiteaID > 0 {
+				row, _ := a.giteaLinkByAccount(ctx, d, sess.GiteaID, now)
+				if row != nil {
+					sess.LinkedAgent = db.AsString(row, "agent")
+				}
+			}
 			return sess
 		}
 	case "agent":
@@ -518,13 +538,18 @@ func (a *App) guard(w http.ResponseWriter, req *http.Request) (*uiSession, bool)
 		a.legacyToken(w, req, candidate)
 		return nil, false
 	}
-	if c, err := req.Cookie(cookieName); err == nil && c.Value != "" {
-		if s := a.sessionLive(req.Context(), a.pool, c.Value, float64(time.Now().Unix())); s != nil {
-			return s, true
-		}
+	if s := a.uiRequestSession(req); s != nil {
+		return s, true
 	}
 	a.loginPage(w, cleanNext(req.URL.Path), "", 401)
 	return nil, false
+}
+
+func (a *App) uiRequestSession(req *http.Request) *uiSession {
+	if c, err := req.Cookie(cookieName); err == nil && c.Value != "" {
+		return a.sessionLive(req.Context(), a.pool, c.Value, float64(time.Now().Unix()))
+	}
+	return nil
 }
 
 // legacyToken accepts an old ?token= link once: validate, cookie, 303 to the same clean URL.
@@ -556,7 +581,7 @@ func (a *App) loginPage(w http.ResponseWriter, next, errMsg string, status int) 
 	if a.cfg.GiteaOAuthEnabled() {
 		link := a.cfg.PublicURL + giteaLoginPath + "?" + url.Values{"next": {next}}.Encode()
 		body += fmt.Sprintf(`<a class=gitea-login href="%s">Sign in with Gitea</a>`, esc(link))
-		body += "<p class=meta>Use your Gitea account to read public threads.</p>"
+		body += "<p class=meta>Use your Gitea account to read public threads and your linked agent’s topics.</p>"
 		open := ""
 		if errMsg != "" {
 			open = " open"
@@ -968,11 +993,17 @@ func (a *App) handleUIAvatar(w http.ResponseWriter, req *http.Request) {
 	}
 	if sess.Kind == giteaSessionKind {
 		name := sanitize.Canon(chi.URLParam(req, "name"))
-		_, publicAuthor, _ := db.QueryOneValue(req.Context(), a.pool,
+		vis, err := core.NewVis(req.Context(), a.pool, sess.LinkedAgent, false)
+		if err != nil {
+			http.NotFound(w, req)
+			return
+		}
+		visible, args := vis.Cond("t")
+		_, visibleAuthor, _ := db.QueryOneValue(req.Context(), a.pool,
 			`SELECT 1 FROM agents a JOIN messages m ON m.author = a.name
 			 JOIN threads t ON t.id = m.thread
-			 WHERE a.low = ? AND t.space IS NULL AND t.deleted = 0 LIMIT 1`, name)
-		if !publicAuthor {
+			 WHERE a.low = ? AND `+visible+" LIMIT 1", append([]any{name}, args...)...)
+		if !visibleAuthor {
 			http.NotFound(w, req)
 			return
 		}
@@ -1247,6 +1278,8 @@ func (a *App) fileVisible(ctx context.Context, sess *uiSession, row map[string]a
 			if err != nil {
 				return false
 			}
+		case giteaSessionKind:
+			me = sess.LinkedAgent
 		case "cfg", "web":
 			admin = true
 		}

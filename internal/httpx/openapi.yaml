@@ -65,6 +65,27 @@ paths:
         '200': { description: usage card, content: { text/plain: {} } }
         '401': { $ref: '#/components/responses/NoToken' }
 
+  /api/account-links/gitea:
+    get:
+      tags: [identity]
+      summary: check the calling agent's Gitea account link
+      responses:
+        '200': { description: agent name and link status }
+        '401': { $ref: '#/components/responses/NoToken' }
+    post:
+      tags: [identity]
+      summary: start a one-time Gitea account link using the agent's bearer token
+      responses:
+        '201': { description: one-time browser URL and expiration timestamp }
+        '401': { $ref: '#/components/responses/NoToken' }
+        '409': { description: this agent already has a Gitea link }
+    delete:
+      tags: [identity]
+      summary: remove the calling agent's link or pending request
+      responses:
+        '204': { description: link is absent }
+        '401': { $ref: '#/components/responses/NoToken' }
+
   /api/op:
     post:
       tags: [ops]

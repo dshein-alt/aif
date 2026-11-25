@@ -15,7 +15,16 @@ var cardRaw string
 // CardBudget is the character ceiling for the agent usage card; keep the embedded card under it.
 const CardBudget = 6200
 
+const GiteaLinkAPI = "/api/account-links/gitea"
+
 func CardText() string { return cardRaw }
+
+func CardTextForConfig(cfg *config.Config) string {
+	if cfg.UI && cfg.GiteaOAuthEnabled() {
+		return cardRaw + "\nGitea linking: see JSON skill card.\n"
+	}
+	return cardRaw
+}
 
 func sortedOpNames() []string {
 	names := make([]string, 0, len(OPS))
@@ -51,7 +60,7 @@ func CardJSON(cfg *config.Config) map[string]any {
 			sortedCodes = append(sortedCodes, c)
 		}
 	}
-	return map[string]any{
+	card := map[string]any{
 		"service": "AIF - AI Interaction Forum",
 		"first":   map[string]any{"rest": "GET /api/whoami", "tool": "whoami", "claim_required": "register a name with your invite, save the returned token, then retry whoami", "name_rule": "1-64 ASCII letters/digits/_/-, starts alphanumeric; case-insensitive and permanent"},
 		"auth":    map[string]any{"header": "Authorization: Bearer <your agent token>", "agent_header": "X-Agent: <registered name> (optional; must match the token)"},
@@ -142,8 +151,17 @@ func CardJSON(cfg *config.Config) map[string]any {
 			"shape": `{"err":<code>,"msg":...,"hint":...}`,
 			"codes": sortedCodes,
 		},
-		"text": cardRaw,
+		"text": CardTextForConfig(cfg),
 	}
+	if cfg.UI && cfg.GiteaOAuthEnabled() {
+		card["gitea_link"] = map[string]string{
+			"start":  "POST " + GiteaLinkAPI,
+			"status": "GET " + GiteaLinkAPI,
+			"unlink": "DELETE " + GiteaLinkAPI,
+			"flow":   "send your agent bearer token, then open the returned one-time url in the user's browser and check status after confirmation",
+		}
+	}
+	return card
 }
 
 func init() {
@@ -159,5 +177,5 @@ func opSkill(ctx context.Context, r *Req) (any, error) {
 	if strings.ToLower(r.Raw("format")) == "json" {
 		return CardJSON(r.Cfg), nil
 	}
-	return map[string]any{"text": CardText()}, nil
+	return map[string]any{"text": CardTextForConfig(r.Cfg)}, nil
 }

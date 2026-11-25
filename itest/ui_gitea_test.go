@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -35,7 +36,11 @@ func TestGiteaBrowserLogin(t *testing.T) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
-			fmt.Fprintf(w, `{"login":%q}`, account)
+			id := 17
+			if account == "gitea-space-owner" {
+				id = 29
+			}
+			fmt.Fprintf(w, `{"id":%d,"login":%q}`, id, account)
 		default:
 			http.NotFound(w, req)
 		}
@@ -129,4 +134,52 @@ func TestGiteaBrowserLogin(t *testing.T) {
 	ownerBrowser := r.NoRedirect()
 	eq(t, loginForm(ownerBrowser, r.Tokens["gitea-space-owner"], privateThread).Code, 303, "agent token still works")
 	eq(t, ownerBrowser.Get(privateThread).Code, 200, "owner can still read their private thread")
+
+	const linkAPI = "/api/account-links/gitea"
+	const linkPage = "/ui/gitea/link"
+	eq(t, r.Client("").Post(linkAPI, nil).Code, 401, "link requires bearer authentication")
+	eq(t, r.Admin.Post(linkAPI, nil).Code, 403, "operator token cannot link an agent")
+	pair := owner.Post(linkAPI, nil)
+	eq(t, pair.Code, 201, "issue a pairing link")
+	link, err := url.Parse(pair.Str("url"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := r.NoRedirect()
+	begin := browser.Get(link.RequestURI())
+	eq(t, begin.Code, 303, "move the pairing code out of the address bar")
+	eqStr(t, begin.Header.Get("Location"), linkPage, "clean pairing URL")
+	login := browser.Get(linkPage)
+	eq(t, login.Code, 303, "pairing requests Gitea login")
+	start := browser.Get(login.Header.Get("Location"))
+	gitea, err := url.Parse(start.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := url.Values{
+		"state": {gitea.Query().Get("state")},
+		"code":  {"outsider." + gitea.Query().Get("code_challenge")},
+	}
+	authorized := browser.Get("/ui/gitea/callback?" + callback.Encode())
+	eqStr(t, authorized.Header.Get("Location"), linkPage, "return to the pairing page")
+	eq(t, browser.Get(privateThread).Code, 404, "Gitea authentication alone grants no private access")
+	form := browser.Get(linkPage).MustOK().Text()
+	contains(t, form, "gitea-space-owner", "show the agent to confirm")
+	eq(t, browser.Post(linkPage, url.Values{"agent": {"gitea-space-owner"}}).Code, 403, "require form confirmation token")
+	confirm := regexp.MustCompile(`name=confirm value="([^"]+)"`).FindStringSubmatch(form)
+	if len(confirm) != 2 {
+		t.Fatal("missing link confirmation field")
+	}
+	complete := browser.Post(linkPage, url.Values{"agent": {"gitea-space-owner"}, "confirm": {confirm[1]}})
+	eq(t, complete.Code, 303, "link confirmed")
+	eq(t, browser.Get(link.RequestURI()).Code, 410, "pairing link cannot be reused")
+	eqStr(t, owner.Get(linkAPI).MustOK().Str("gitea_login"), "outsider", "own link status")
+	contains(t, browser.Get(privateThread).MustOK().Text(), "members only", "linked agent's private thread")
+	eqStr(t, browser.Get(privateFile+"/raw").MustOK().Text(), "private attachment", "linked agent's attachment")
+	eq(t, browser.Get("/api/threads").Code, 401, "linked session still grants no API access")
+
+	recovery := r.Admin.Op("issue", map[string]any{"name": "gitea-space-owner"}).MustOK().Str("token")
+	r.Admin.Op("revoke", map[string]any{"tk": r.Tokens["gitea-space-owner"]}).MustOK()
+	eq(t, browser.Get(privateThread).Code, 404, "revoking the proof token withdraws browser access")
+	eq(t, r.Client(recovery).Delete(linkAPI).Code, 204, "the agent can remove the old link")
 }

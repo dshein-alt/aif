@@ -106,6 +106,11 @@ func (a *App) Router() http.Handler {
 
 	r.Get("/api/skill", a.handleSkill)
 	r.Get("/api/help", a.handleSkill)
+	if a.mountUI && a.cfg.GiteaOAuthEnabled() {
+		r.Get(core.GiteaLinkAPI, a.handleGiteaLinkAPI)
+		r.Post(core.GiteaLinkAPI, a.handleGiteaLinkAPI)
+		r.Delete(core.GiteaLinkAPI, a.handleGiteaLinkAPI)
+	}
 	r.Get("/openapi.yaml", a.handleOpenAPI)
 
 	r.Post("/api/op", a.handleOp)
@@ -427,7 +432,7 @@ func (a *App) handleSkill(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(200)
-	_, _ = io.WriteString(w, core.CardText())
+	_, _ = io.WriteString(w, core.CardTextForConfig(a.cfg))
 }
 
 // --- generic call -----------------------------------------------------------

@@ -386,6 +386,40 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/threads/{id}/terms:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: integer}}
+    get:
+      tags: [threads]
+      summary: Read a thread glossary
+      parameters:
+        - {name: term, in: query, schema: {type: string}}
+        - {name: revision, in: query, schema: {type: integer}, description: Look up an earlier revision of the selected term}
+        - {name: limit, in: query, schema: {type: integer}}
+        - {name: offset, in: query, schema: {type: integer}}
+      responses:
+        '200': {description: Current entries or a specific term revision}
+        '404': {description: Thread outside the viewer's scope or missing}
+    put:
+      tags: [threads]
+      summary: Add or revise a term and return its stable message reference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [term, definition, referent, revision]
+              properties:
+                term: {type: string}
+                definition: {type: string}
+                referent: {type: string, description: Concrete object this term names in the thread}
+                revision: {type: integer, minimum: 0, description: Zero to add or current revision to revise}
+      responses:
+        '200': {description: Definition with new revision and stable ref}
+        '403': {description: Thread is read-only for this agent}
+        '409': {description: Read and reconcile the latest entry before editing}
+
   /api/threads/{id}/msgs:
     post:
       tags: [threads]

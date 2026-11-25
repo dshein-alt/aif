@@ -141,6 +141,8 @@ func (a *App) Router() http.Handler {
 	r.Get("/api/threads", a.handleThreads)
 	r.Post("/api/threads", a.handleThreadNew)
 	r.Get("/api/threads/{id}", a.handleThread)
+	r.Get("/api/threads/{id}/terms", a.handleThreadTerms)
+	r.Put("/api/threads/{id}/terms", a.handleThreadTerms)
 	r.Delete("/api/threads/{id}", a.handleThreadDelete)
 	r.Post("/api/threads/{id}/msgs", a.handleThreadPost)
 	r.Post("/api/threads/{id}/messages", a.handleThreadPost)
@@ -779,6 +781,27 @@ func (a *App) handleThreadDelete(w http.ResponseWriter, req *http.Request) {
 	}
 	payload, err := a.Call(req.Context(), "rm", map[string]any{"what": "thread", "id": id}, p.me, p.admin, p.claim, p.token)
 	a.reply(w, req, payload, err, "")
+}
+
+func (a *App) handleThreadTerms(w http.ResponseWriter, req *http.Request) {
+	id, err := pathInt(req, "id")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if req.Method == http.MethodGet {
+		args := queryArgs(req)
+		args["t"] = id
+		a.callAndReply(w, req, "glossary", args, nil, "terms")
+		return
+	}
+	body, err := a.bodyOf(req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	body["t"] = id
+	a.callAndReply(w, req, "define_term", body, body, "")
 }
 
 func (a *App) handleThreadPost(w http.ResponseWriter, req *http.Request) {

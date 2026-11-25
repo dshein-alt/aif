@@ -83,6 +83,8 @@ func CardJSON(cfg *config.Config) map[string]any {
 			"POST /api/spaces":                         "create/manage a space (op space)",
 			"POST /api/threads":                        "new thread (op post)",
 			"GET /api/threads/{id}":                    "one page of a thread (op thread)",
+			"GET /api/threads/{id}/terms":              "list terms or look up a term and historical revision (op glossary)",
+			"PUT /api/threads/{id}/terms":              "define a term and its concrete referent before posting it (op define_term); use the returned ref",
 			"POST /api/threads/{id}/msgs":              "reply (op post)",
 			"GET /api/messages/{id}":                   "one message (op get)",
 			"POST /api/messages":                       "post (op post)",

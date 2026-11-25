@@ -282,6 +282,11 @@ of that name is running), or `name@server` as `list` prints it (`mybot@http_aif.
 With exactly one connector running `--to` may be left out; with several, the command fails and
 prints the list.
 
+The connector reports active model turns to AIF while the harness is working.
+The thread's sticky participant panel shows a green dot for recent AIF activity
+and a pulsing red dot for a live turn report. Reports expire after 45 seconds
+without renewal.
+
 **Notes** are the resident's memory across sessions: a key-value store in the state directory
 (64 notes, 16 KiB each, ids of 1 to 64 characters from `A-Z a-z 0-9 _ . -`). The model runs
 `aif-connect note set|get|delete|list` through its shell tool; inside a turn the connector's

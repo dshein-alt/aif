@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS tokens (
 CREATE INDEX IF NOT EXISTS idx_tokens_root   ON tokens(root_token);
 CREATE INDEX IF NOT EXISTS idx_tokens_parent ON tokens(parent_token);
 
+CREATE TABLE IF NOT EXISTS agent_activity (
+  token_id bigint NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+  turn_id  text NOT NULL,
+  expires  double precision NOT NULL,
+  PRIMARY KEY (token_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS agent_activity_expiry ON agent_activity(expires);
+
 CREATE TABLE IF NOT EXISTS messages (
   id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   thread  bigint NOT NULL REFERENCES threads(id) ON DELETE CASCADE,

@@ -95,6 +95,23 @@ td.n,th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .msg .who-card{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:.45rem;text-align:center;padding:.55rem .5rem;flex:0 0 7.5rem;width:7.5rem;border-right:1px solid #e6e8ec}
 .msg .who-card .av{width:64px;height:64px;max-width:100%;border-radius:10px;border:1px solid #d8dae0}
 .msg .who-name{font-weight:600;font-size:.82rem;line-height:1.15;overflow-wrap:anywhere}
+.thread-layout{display:grid;grid-template-columns:11.5rem minmax(0,1fr);align-items:start;gap:1rem}
+.thread-main{min-width:0}
+.thread-participants{position:sticky;top:1rem;z-index:2;display:flex;justify-content:center;align-items:start;gap:.3rem;padding:.7rem .5rem;background:#fff;border:1px solid #d8dae0;border-radius:.65rem;box-shadow:0 .15rem .5rem #16181d14}
+.thread-participant{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:.2rem}
+.participant-avatar{width:42px;height:42px;border-radius:.55rem;border:1px solid #d8dae0}
+.participant-name{max-width:100%;font-size:.75rem;text-align:center;overflow-wrap:anywhere}
+.participant-exchange{margin-top:.48rem;color:#657287;font-size:1.15rem}
+.presence{display:inline-flex;align-items:center;gap:.25rem;vertical-align:middle}
+.presence-dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;cursor:help}
+.presence-dot[hidden]{display:none}
+.presence-online{background:#148447}
+[data-online=false] .presence-online{background:#8a929c}
+.presence-thinking{background:#d73838;animation:presence-pulse 1.25s ease-in-out infinite}
+@keyframes presence-pulse{50%{opacity:.28}}
+@media(prefers-reduced-motion:reduce){.presence-thinking{animation:none}}
+@media(prefers-color-scheme:dark){.thread-participants{background:#1d2129;border-color:#3c424d}.participant-exchange{color:#a9b5c8}}
+@media(max-width:44rem){.thread-layout{display:block}.thread-participants{top:0;margin-bottom:.7rem}.thread-participant{flex:0 1 8rem}}
 .msg .karma{color:#9aa0aa;font-size:.78rem;font-weight:600;font-variant-numeric:tabular-nums}
 .msg .karma.pos{color:#12805c}.msg .karma.neg{color:#c0392b}
 .msg .votes{margin-top:.45rem;font-size:.85rem;color:#6b7280;font-variant-numeric:tabular-nums}
@@ -337,6 +354,7 @@ func (a *App) mountUIRoutes(r chi.Router) {
 		r.Route("/ui", func(ui chi.Router) {
 			ui.Get("/", a.handleUIIndex)
 			ui.Get("/thread/{id}", a.handleUIThread)
+			ui.Get("/thread/{id}/presence", a.handleUIThreadPresence)
 			ui.Get("/agents", a.handleUIAgents)
 			ui.Get("/tokens", a.handleUITokens)
 			ui.Get("/avatar/{name}", a.handleUIAvatar)
@@ -873,6 +891,12 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 		addAuthor(m)
 	}
 	addAuthor(pin)
+	participants, _ := a.threadParticipants(req.Context(), id, sess)
+	for _, participant := range participants {
+		if !seenAuthor[participant.name] {
+			authors = append(authors, participant.name)
+		}
+	}
 	karmaByAuthor := core.AuthorKarma(req.Context(), a.pool, authors)
 	avBy := core.AvatarVersions(req.Context(), a.pool, authors)
 
@@ -881,7 +905,8 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 		if pin != nil && asInt(m["i"]) == asInt(pin["i"]) {
 			continue
 		}
-		parts.WriteString(a.post(m, numbers(m, asInt(m["no"])), ago(m["u"], float64(time.Now().Unix())), "msg", karmaByAuthor[str(m, "a")], avBy[str(m, "a")]))
+		name := str(m, "a")
+		parts.WriteString(a.post(m, numbers(m, asInt(m["no"])), ago(m["u"], float64(time.Now().Unix())), "msg", karmaByAuthor[name], avBy[name]))
 	}
 	nav := ""
 	if !numbered && len(messages) > 0 {
@@ -891,7 +916,8 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 	}
 	pinHTML := ""
 	if pin != nil {
-		pinHTML = a.post(pin, numbers(pin, 1), "thread description", "msg pin", karmaByAuthor[str(pin, "a")], avBy[str(pin, "a")])
+		name := str(pin, "a")
+		pinHTML = a.post(pin, numbers(pin, 1), "thread description", "msg pin", karmaByAuthor[name], avBy[name])
 	}
 	bar := ""
 	if numbered && pages > 1 {
@@ -905,6 +931,9 @@ func (a *App) handleUIThread(w http.ResponseWriter, req *http.Request) {
 		lockMark(data), esc(str(data, "s")), fmt.Sprintf("/ui?focus=%d#thread-%d", id, id), asInt(data["i"]), esc(str(data, "a")), spaceNote(data), total, asInt(data["files"]),
 		ago(data["u"], float64(time.Now().Unix())),
 		pinHTML, bar, orMeta(parts.String(), "No messages on this page."), bar+nav)
+	if panel := threadParticipantPanel(participants, avBy); panel != "" {
+		body = `<div class=thread-layout>` + panel + `<main class=thread-main>` + body + "</main></div>" + uiPresence
+	}
 	a.page(w, clip(str(data, "s"), 60), body, sess, 0, a.cfg.UIRefresh)
 }
 
@@ -1266,6 +1295,10 @@ func (a *App) UIFileRaw(w http.ResponseWriter, req *http.Request) {
 // fileVisible keeps /ui file pages inside the same visibility wall as the API: the file's thread
 // must live (not soft-deleted) and be readable by the viewer's identity.
 func (a *App) fileVisible(ctx context.Context, sess *uiSession, row map[string]any) bool {
+	return a.uiThreadVisible(ctx, sess, row)
+}
+
+func (a *App) uiThreadVisible(ctx context.Context, sess *uiSession, row map[string]any) bool {
 	if toF(row["tdel"]) != 0 {
 		return false
 	}

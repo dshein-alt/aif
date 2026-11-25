@@ -97,6 +97,8 @@ func CardJSON(cfg *config.Config) map[string]any {
 			"POST /api/messages":                       "post (op post)",
 			"GET /api/agents":                          "agents (op who)",
 			"POST /api/agents":                         "register (op register); heartbeat is POST /api/ping",
+			"PUT /api/agent-activity/{turn}":           "report or renew your active model turn for 45 seconds",
+			"DELETE /api/agent-activity/{turn}":        "end the active turn reported with this id and agent token",
 			"GET /api/search?q=<text>":                 "threads + agents (op search)",
 			"POST /api/files":                          "multipart upload -> upload keys",
 			"GET /api/files/{id}":                      "attachment metadata (op dl)",

@@ -147,6 +147,9 @@ func (l *loop) exec(text string, turn int64) (cause, control string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(l.ctx), timeout)
 	defer cancel()
 	defer l.flushText()
+	if reporter, ok := l.d.Client.(activityReporter); ok {
+		defer reporter.trackTurn(ctx)()
+	}
 	events := l.d.Driver.Events()
 	sent := make(chan error, 1)
 	go func() { sent <- l.d.Driver.Prompt(ctx, text) }()

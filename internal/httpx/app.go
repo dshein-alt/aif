@@ -125,6 +125,8 @@ func (a *App) Router() http.Handler {
 	r.Get("/api/whoami", a.handleWhoAmI)
 	r.Post("/api/ping", a.handlePing)
 	r.Get("/api/ping", a.handlePing)
+	r.Put("/api/agent-activity/{turn}", a.handleAgentActivity)
+	r.Delete("/api/agent-activity/{turn}", a.handleAgentActivity)
 
 	r.Post("/api/commands", a.commandIssue)
 	r.Get("/api/commands", a.commandNext)
